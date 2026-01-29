@@ -12,6 +12,12 @@ from typing import Any, Callable
 class EventType(str, Enum):
     """事件类型定义"""
 
+    # Infra 生命周期
+    DB_CONNECTED = "db.connected"
+    ES_CONNECTED = "es.connected"
+    MQ_CONNECTED = "mq.connected"
+    KG_CONNECTED = "kg.connected"
+
     # 组件生命周期
     COMPONENT_REGISTERED = "component.registered"
     COMPONENT_CREATED = "component.created"

@@ -2,7 +2,9 @@
 
 from typing import Any
 
-from sqlobjects.database import close_db, init_db
+from sqlobjects.database import close_db, create_tables, drop_tables, get_database, init_db
+
+from ...events import EventType, event_bus
 
 
 async def setup_db(
@@ -27,7 +29,17 @@ async def setup_db(
         pool_recycle=pool_recycle,
         **engine_kwargs,
     )
+    await event_bus.publish(EventType.DB_CONNECTED)
 
 
 async def shutdown_db():
     await close_db()
+
+
+__all__ = [
+    "setup_db",
+    "shutdown_db",
+    "create_tables",
+    "drop_tables",
+    "get_database",
+]

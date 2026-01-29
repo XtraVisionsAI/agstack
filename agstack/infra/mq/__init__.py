@@ -5,6 +5,8 @@ from asyncio import get_event_loop
 import aio_pika
 from aio_pika.abc import AbstractChannel, AbstractConnection, AbstractQueue
 
+from ...events import EventType, event_bus
+
 
 _connection: AbstractConnection | None = None
 _channels: dict[str, AbstractChannel] = {}
@@ -17,6 +19,8 @@ async def setup_mq(host: str, port: int, username: str, password: str):
 
     connection_url = f"amqp://{username}:{password}@{host}:{port}/"
     _connection = await aio_pika.connect_robust(connection_url, loop=get_event_loop())
+
+    await event_bus.publish(EventType.MQ_CONNECTED)
 
 
 async def shutdown_mq():

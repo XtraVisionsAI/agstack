@@ -2,6 +2,8 @@
 
 from elasticsearch.dsl import async_connections
 
+from ...events import EventType, event_bus
+
 
 async def setup_es(
     hosts: list[str],
@@ -21,6 +23,7 @@ async def setup_es(
         sniff_on_node_failure=True,
         http_auth=(username, password),
     )
+    await event_bus.publish(EventType.ES_CONNECTED)
 
 
 async def shutdown_es():
