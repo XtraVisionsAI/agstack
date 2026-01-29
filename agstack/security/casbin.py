@@ -46,10 +46,15 @@ class CasbinRules(ObjectModel):
 class SqlObjectsAdapter(AsyncAdapter, AsyncFilteredAdapter):
     """基于 sqlobjects 的 Casbin Adapter（支持过滤加载）"""
 
-    @staticmethod
-    async def create(db_name: str | None = None):
-        db = get_database(db_name)
-        await db.create_tables(CasbinRules)
+    _inited: bool = False
+
+    @classmethod
+    async def create(cls, db_name: str | None = None):
+        if not cls._inited:
+            db = get_database(db_name)
+            await db.create_tables(CasbinRules)
+
+        return cls()
 
     def __init__(self):
         self._filtered = False
