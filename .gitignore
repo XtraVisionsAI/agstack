@@ -1,0 +1,41 @@
+**/.DS_Store
+
+# IDE-specific stuff
+.idea/
+.vscode/
+
+# Shared settings
+!.vscode/settings.json                  # Shared editor settings
+!.vscode/launch.json                    # Debug config
+!.vscode/tasks.json                     # Build tasks
+!.vscode/extensions.json                # Recommended extensions
+
+!.idea/codeStyles/                      # Code style settings
+!.idea/inspectionProfiles/              # Code inspection profiles
+!.idea/runConfigurations/               # Run/debug configurations
+!.idea/vcs.xml                          # VCS settings
+!.idea/modules.xml                      # Module structure (if needed)
+!.idea/compiler.xml                     # Compiler settings
+!.idea/encodings.xml                    # File encoding settings
+
+# File-based project format
+*.iml
+*.ipr
+*.iws
+
+# Vim temp files
+*.swp
+*.swo
+*~
+
+__pycache__/
+build/
+dist/
+eggs/
+sdist/
+wheels/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.eggs/
+.venv/

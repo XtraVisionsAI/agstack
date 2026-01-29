@@ -1,0 +1,27 @@
+repos:
+
+  - repo: https://github.com/RobertCraigie/pyright-python
+    rev: v1.1.405
+    hooks:
+      - id: pyright
+        additional_dependencies:
+          - ag-ui-protocol
+          - aio_pika
+          - elasticsearch[async]
+          - fastapi
+          - jwcrypto
+          - loguru
+          - openai
+          - passlib[bcrypt]
+          - pycasbin
+          - pydantic
+          - pytest-asyncio
+          - sqlalchemy[asyncio]
+          - sqlobjects
+          - tiktoken
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.14.14
+    hooks:
+      - id: ruff-check
+      - id: ruff-format
