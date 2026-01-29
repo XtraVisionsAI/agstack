@@ -4,11 +4,16 @@ from elasticsearch.dsl import async_connections
 
 
 async def setup_es(
-    host: str, username: str, password: str, timeout: float = 3, sniff_on_start: bool = True, sniff_timeout: float = 3
+    hosts: list[str],
+    username: str,
+    password: str,
+    timeout: float = 3,
+    sniff_on_start: bool = True,
+    sniff_timeout: float = 3,
 ):
     # 为 elasticsearch-dsl 创建连接
     async_connections.connections.create_connection(
-        hosts=host,
+        hosts=hosts,
         verify_certs=False,
         request_timeout=timeout,
         sniff_on_start=sniff_on_start,
@@ -18,5 +23,11 @@ async def setup_es(
     )
 
 
-async def shotdown_es():
+async def shutdown_es():
     await async_connections.get_connection().close()
+
+
+__all__ = [
+    "setup_es",
+    "shutdown_es",
+]
