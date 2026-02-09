@@ -1,3 +1,9 @@
+## 1.0.2 (2026-02-09)
+
+### Feat
+
+- implement NebulaGraph operations
+
 ## 1.0.1 (2026-01-30)
 
 ### Feat
