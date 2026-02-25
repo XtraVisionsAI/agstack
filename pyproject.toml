@@ -1,6 +1,6 @@
 [project]
 name = "agstack"
-version = "1.0.5"
+version = "1.0.6"
 description = "Production-ready toolkit for building FastAPI and LLM applications"
 readme = "README.md"
 license = "MIT"
