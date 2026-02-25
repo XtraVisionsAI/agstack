@@ -1,10 +1,18 @@
 #  Copyright (c) 2020-2026 XtraVisions, All rights reserved.
 
+import logging
 from typing import Any
 
 from sqlobjects.database import close_db, create_tables, drop_tables, get_database, init_db
 
 from ...events import EventType, event_bus
+
+
+# 特殊处理：为 sqlalchemy logger 添加一个 dummy handler
+# 防止 SQLAlchemy 在 echo=True 时自动添加 StreamHandler
+sqlalchemy_logger = logging.getLogger("sqlalchemy.engine.Engine")
+if not sqlalchemy_logger.handlers:
+    sqlalchemy_logger.addHandler(logging.NullHandler())
 
 
 async def setup_db(

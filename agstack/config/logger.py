@@ -4,8 +4,17 @@ import logging
 import sys
 from datetime import time, timedelta
 from pathlib import Path
+from typing import TYPE_CHECKING, Optional
 
-from loguru import RetentionFunction, RotationFunction, logger
+from loguru import logger
+
+
+if TYPE_CHECKING:
+    from loguru import RetentionFunction, RotationFunction
+
+
+RotationType = Optional[str | int | time | timedelta | "RotationFunction"]  # noqa: UP045
+RetentionType = Optional[str | int | timedelta | "RetentionFunction"]  # noqa: UP045
 
 
 class InterceptHandler(logging.Handler):
@@ -36,8 +45,8 @@ def setup_logger(
     appname: str,
     output: str | Path,
     level: str | int = "INFO",
-    rotation: str | int | time | timedelta | RotationFunction | None = "1 day",
-    retention: str | int | timedelta | RetentionFunction | None = "30 days",
+    rotation: RotationType = "1 day",
+    retention: RetentionType = "30 days",
 ) -> None:
     """初始化日志系统
 
@@ -75,6 +84,13 @@ def setup_logger(
 
     # 拦截标准 logging
     logging.basicConfig(handlers=[InterceptHandler()], level=0, force=True)
-    for name in logging.root.manager.loggerDict.keys():
-        logging.getLogger(name).handlers = []
-        logging.getLogger(name).propagate = True
+
+    # 清除所有已存在的 logger handlers 并设置传播
+    logging.root.handlers = [InterceptHandler()]
+    logging.root.setLevel(0)
+
+    for name in list(logging.root.manager.loggerDict.keys()):
+        log = logging.getLogger(name)
+        log.handlers = []
+        log.propagate = True
+        log.setLevel(0)
