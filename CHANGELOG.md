@@ -1,3 +1,9 @@
+## 1.0.5 (2026-02-25)
+
+### Fix
+
+- **common/logger**: wrong type define for loguru type check
+
 ## 1.0.4 (2026-02-25)
 
 ### Fix
