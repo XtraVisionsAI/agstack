@@ -4,7 +4,7 @@ import logging
 import sys
 from datetime import time, timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 from loguru import logger
 
@@ -12,9 +12,8 @@ from loguru import logger
 if TYPE_CHECKING:
     from loguru import RetentionFunction, RotationFunction
 
-
-RotationType = Optional[str | int | time | timedelta | "RotationFunction"]  # noqa: UP045
-RetentionType = Optional[str | int | timedelta | "RetentionFunction"]  # noqa: UP045
+    RotationType = None | str | int | time | timedelta | RotationFunction
+    RetentionType = None | str | int | timedelta | RetentionFunction
 
 
 class InterceptHandler(logging.Handler):
@@ -45,8 +44,8 @@ def setup_logger(
     appname: str,
     output: str | Path,
     level: str | int = "INFO",
-    rotation: RotationType = "1 day",
-    retention: RetentionType = "30 days",
+    rotation: "RotationType" = "1 day",
+    retention: "RetentionType" = "30 days",
 ) -> None:
     """初始化日志系统
 
