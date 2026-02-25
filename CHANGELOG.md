@@ -1,3 +1,9 @@
+## 1.0.4 (2026-02-25)
+
+### Fix
+
+- **infra/db**: prevent SQLAlchemy from adding default StreamHandler
+
 ## 1.0.3 (2026-02-14)
 
 ## 1.0.2 (2026-02-09)
