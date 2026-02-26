@@ -1,3 +1,11 @@
+## 1.0.7 (2026-02-26)
+
+### Fix
+
+- **db**: prevent SQLAlchemy from auto-adding StreamHandler
+- **security/casbin**: use SQLObjects syntax to query data
+- **infra/es**: explicitly set connection alias and handle shutdown errors
+
 ## 1.0.6 (2026-02-25)
 
 ## 1.0.5 (2026-02-25)
