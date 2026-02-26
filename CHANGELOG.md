@@ -1,3 +1,9 @@
+## 1.0.8 (2026-02-26)
+
+### Fix
+
+- **config/logger**: remove redundant child logger cleanup in setup_logger
+
 ## 1.0.7 (2026-02-26)
 
 ### Fix
