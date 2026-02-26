@@ -1,18 +1,17 @@
 #  Copyright (c) 2020-2026 XtraVisions, All rights reserved.
 
-import logging
 from typing import Any
 
+# 特殊处理：防止 SQLAlchemy 在 echo=True 时自动添加 StreamHandler
+# SQLAlchemy 的 InstanceLogger 会检查实例级 logger.handlers（总是空的），
+# 所以在父 logger 添加 handler 无效。需要 monkey patch _add_default_handler
+import sqlalchemy.log as _sa_log
 from sqlobjects.database import close_db, create_tables, drop_tables, get_database, init_db
 
 from ...events import EventType, event_bus
 
 
-# 特殊处理：为 sqlalchemy logger 添加一个 dummy handler
-# 防止 SQLAlchemy 在 echo=True 时自动添加 StreamHandler
-sqlalchemy_logger = logging.getLogger("sqlalchemy.engine.Engine")
-if not sqlalchemy_logger.handlers:
-    sqlalchemy_logger.addHandler(logging.NullHandler())
+_sa_log._add_default_handler = lambda logger: None
 
 
 async def setup_db(
