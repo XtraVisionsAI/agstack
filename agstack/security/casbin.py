@@ -70,13 +70,13 @@ class SqlObjectsAdapter(AsyncAdapter, AsyncFilteredAdapter):
         query = CasbinRules.objects
 
         if filter.ptype:
-            query = query.filter(ptype__in=filter.ptype)
+            query = query.filter(CasbinRules.ptype.in_(filter.ptype))
         if filter.v0:
-            query = query.filter(v0__in=filter.v0)
+            query = query.filter(CasbinRules.v0.in_(filter.v0))
         if filter.v1:
-            query = query.filter(v1__in=filter.v1)
+            query = query.filter(CasbinRules.v1.in_(filter.v1))
         if filter.v2:
-            query = query.filter(v2__in=filter.v2)
+            query = query.filter(CasbinRules.v2.in_(filter.v2))
 
         rules = await query.all()
         for rule in rules:
