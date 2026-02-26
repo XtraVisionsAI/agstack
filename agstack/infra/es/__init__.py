@@ -15,6 +15,7 @@ async def setup_es(
 ):
     # 为 elasticsearch-dsl 创建连接
     async_connections.connections.create_connection(
+        alias="default",
         hosts=hosts,
         verify_certs=False,
         request_timeout=timeout,
@@ -27,7 +28,11 @@ async def setup_es(
 
 
 async def shutdown_es():
-    await async_connections.get_connection().close()
+    try:
+        conn = async_connections.get_connection()
+        await conn.close()
+    except:  # noqa
+        pass
 
 
 __all__ = [
