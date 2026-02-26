@@ -86,10 +86,3 @@ def setup_logger(
 
     # 清除所有已存在的 logger handlers 并设置传播
     logging.root.handlers = [InterceptHandler()]
-    logging.root.setLevel(0)
-
-    for name in list(logging.root.manager.loggerDict.keys()):
-        log = logging.getLogger(name)
-        log.handlers = []
-        log.propagate = True
-        log.setLevel(0)
