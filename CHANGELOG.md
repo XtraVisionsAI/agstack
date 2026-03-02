@@ -1,3 +1,9 @@
+## 1.1.0 (2026-03-02)
+
+### Feat
+
+- **decorators**: add type annotations to with_session decorator
+
 ## 1.0.8 (2026-02-26)
 
 ### Fix
