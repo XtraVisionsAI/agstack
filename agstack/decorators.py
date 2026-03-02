@@ -4,6 +4,7 @@ import asyncio
 import time
 from functools import wraps
 from logging import Logger
+from typing import Awaitable, Callable, ParamSpec, TypeVar
 
 from sqlobjects.session import ctx_session, has_session
 
@@ -49,17 +50,21 @@ def autoretry(
     return decorator
 
 
-def with_session(func, dbname: str | None = None):
+P = ParamSpec("P")
+R = TypeVar("R")
+
+
+def with_session(func: Callable[P, Awaitable[R]], dbname: str | None = None) -> Callable[P, Awaitable[R]]:
     """装饰器：确保方法在 session 上下文中执行，支持嵌套调用"""
 
     @wraps(func)
-    async def wrapper(self, *args, **kwargs):
+    async def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
         # 如果已经在 session 上下文中，直接执行
         if has_session(dbname):
-            return await func(self, *args, **kwargs)
+            return await func(*args, **kwargs)
 
         # 否则创建新的 session 上下文
         async with ctx_session(dbname):
-            return await func(self, *args, **kwargs)
+            return await func(*args, **kwargs)
 
     return wrapper
