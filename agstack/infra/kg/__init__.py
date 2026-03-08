@@ -42,17 +42,18 @@ async def setup_kg(
     if not pool.init(hosts, config):
         raise RuntimeError("Failed to initialize NebulaGraph connection pool")
 
-    # 验证连接
+    # 验证连接，space 不存在时自动创建
     session = pool.get_session(username, password)
     try:
-        result = session.execute(f"USE {space}")
+        session.execute(f"CREATE SPACE IF NOT EXISTS `{space}` (vid_type=FIXED_STRING(64))")
+        result = session.execute(f"USE `{space}`")
         if not result.is_succeeded():
             raise RuntimeError(f"Failed to use space '{space}': {result.error_msg()}")
     finally:
         session.release()
 
     _context = _KGContext(pool=pool, space=space, username=username, password=password)
-    await event_bus.publish(EventType.KG_CONNECTED)
+    await event_bus.publish(EventType.KG_INITED, {"pool": pool})
 
 
 async def shutdown_kg():

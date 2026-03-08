@@ -5,9 +5,12 @@ import time
 from typing import TYPE_CHECKING, Any, AsyncIterator, Literal, overload
 
 from httpx import AsyncClient
+from httpx import Timeout as HttpxTimeout
 from openai import APIError, APITimeoutError, AsyncOpenAI, OpenAI, RateLimitError
+from openai import Timeout as OpenAITimeout
 from openai.types.chat import ChatCompletionMessageParam
 
+from ..contexts import get_request_id
 from ..exceptions import AppException
 
 
@@ -51,16 +54,20 @@ class LLMClient:
         """
         self._base_url = base_url
 
+        # 只限制连接超时，读取不限（推理时间不可预估）
+        _openai_timeout = OpenAITimeout(connect=10.0, read=None, write=None, pool=None)
+        _httpx_timeout = HttpxTimeout(connect=10.0, read=None, write=None, pool=None)
+
         # 异步客户端
         self._async_client = AsyncOpenAI(
             base_url=base_url,
             api_key=api_key,
-            timeout=60.0,
+            timeout=_openai_timeout,
             max_retries=0,  # 手动控制重试
         )
         self._async_http_client = AsyncClient(
             headers={"Authorization": f"Bearer {api_key}"},
-            timeout=60.0,
+            timeout=_httpx_timeout,
         )
 
         # 同步客户端（延迟初始化）
@@ -69,7 +76,7 @@ class LLMClient:
         self._sync_client_config = {
             "base_url": base_url,
             "api_key": api_key,
-            "timeout": 60.0,
+            "timeout": _openai_timeout,
             "max_retries": 0,
         }
 
@@ -150,6 +157,7 @@ class LLMClient:
                     messages=messages,
                     temperature=temperature,
                     max_tokens=max_tokens,
+                    extra_headers={"X-Request-ID": get_request_id()},
                     **kwargs,
                 )
 
@@ -255,6 +263,7 @@ class LLMClient:
                 max_tokens=max_tokens,
                 stream=True,
                 stream_options={"include_usage": True},
+                extra_headers={"X-Request-ID": get_request_id()},
                 **kwargs,
             )
 
@@ -293,7 +302,9 @@ class LLMClient:
             exceptions=(APITimeoutError, ConnectionError),
         )
         async def _call():
-            return await self._async_client.embeddings.create(model=model, input=texts)
+            return await self._async_client.embeddings.create(
+                model=model, input=texts, extra_headers={"X-Request-ID": get_request_id()}
+            )
 
         try:
             response = await _call()
@@ -447,6 +458,7 @@ class LLMClient:
                     "top_n": top_n,
                     "return_documents": True,
                 },
+                headers={"X-Request-ID": get_request_id()},
             )
 
         try:
@@ -495,7 +507,7 @@ class LLMClient:
                     "top_n": top_n,
                     "return_documents": True,
                 },
-                timeout=60.0,
+                timeout=None,
             )
             response.raise_for_status()
             data = response.json()

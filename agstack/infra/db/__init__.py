@@ -27,7 +27,7 @@ async def setup_db(
     **engine_kwargs: Any,
 ):
     url = f"postgresql+asyncpg://{username}:{password}@{host}/{database}"
-    await init_db(
+    db = await init_db(
         url,
         echo=echo,
         pool_size=pool_size,
@@ -36,7 +36,7 @@ async def setup_db(
         pool_recycle=pool_recycle,
         **engine_kwargs,
     )
-    await event_bus.publish(EventType.DB_CONNECTED)
+    await event_bus.publish(EventType.DB_INITED, {"db": db})
 
 
 async def shutdown_db():

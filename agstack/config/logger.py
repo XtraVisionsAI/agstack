@@ -26,16 +26,20 @@ class InterceptHandler(logging.Handler):
             level = record.levelno
 
         # 直接使用 logging.LogRecord 的信息，避免栈帧查找
-        logger.patch(
+        patched = logger.patch(
             lambda r: r.update(
                 name=record.name,
-                file={"name": record.pathname, "path": record.pathname},  # type: ignore[arg-type]
+                file={"name": record.pathname, "path": record.pathname},  # type: ignore
                 line=record.lineno,
                 function=record.funcName,
             )
-        ).log(level, record.getMessage())
+        )
 
-        # CRITICAL/FATAL 级别自动退出
+        if record.exc_info:
+            patched.opt(exception=record.exc_info).log(level, record.getMessage())
+        else:
+            patched.log(level, record.getMessage())
+
         if record.levelno >= logging.CRITICAL:
             sys.exit(1)
 

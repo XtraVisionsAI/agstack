@@ -13,10 +13,10 @@ class EventType(str, Enum):
     """事件类型定义"""
 
     # Infra 生命周期
-    DB_CONNECTED = "db.connected"
-    ES_CONNECTED = "es.connected"
-    MQ_CONNECTED = "mq.connected"
-    KG_CONNECTED = "kg.connected"
+    DB_INITED = "db.inited"
+    ES_INITED = "es.inited"
+    MQ_INITED = "mq.inited"
+    KG_INITED = "kg.inited"
 
     # 组件生命周期
     COMPONENT_REGISTERED = "component.registered"

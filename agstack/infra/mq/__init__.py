@@ -20,7 +20,7 @@ async def setup_mq(host: str, port: int, username: str, password: str):
     connection_url = f"amqp://{username}:{password}@{host}:{port}/"
     _connection = await aio_pika.connect_robust(connection_url, loop=get_event_loop())
 
-    await event_bus.publish(EventType.MQ_CONNECTED)
+    await event_bus.publish(EventType.MQ_INITED, {"connection": _connection})
 
 
 async def shutdown_mq():

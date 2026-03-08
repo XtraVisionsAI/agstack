@@ -14,7 +14,7 @@ async def setup_es(
     sniff_timeout: float = 3,
 ):
     # 为 elasticsearch-dsl 创建连接
-    async_connections.connections.create_connection(
+    es = async_connections.connections.create_connection(
         alias="default",
         hosts=hosts,
         verify_certs=False,
@@ -24,7 +24,7 @@ async def setup_es(
         sniff_on_node_failure=True,
         http_auth=(username, password),
     )
-    await event_bus.publish(EventType.ES_CONNECTED)
+    await event_bus.publish(EventType.ES_INITED, {"es": es})
 
 
 async def shutdown_es():

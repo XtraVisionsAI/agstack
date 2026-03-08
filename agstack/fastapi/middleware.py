@@ -8,6 +8,8 @@ from typing import Callable
 from fastapi import Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 
+from ..contexts import reset_request_id, set_request_id
+
 
 class RequestIDMiddleware(BaseHTTPMiddleware):
     """请求 ID 中间件
@@ -22,8 +24,12 @@ class RequestIDMiddleware(BaseHTTPMiddleware):
         # 将 request_id 存储到 request.state（供后续使用）
         request.state.request_id = request_id
 
-        # 调用下一个处理器
-        response = await call_next(request)
+        token = set_request_id(request_id)
+
+        try:
+            response = await call_next(request)
+        finally:
+            reset_request_id(token)
 
         # 在响应头中返回 request_id
         response.headers["X-Request-ID"] = request_id
