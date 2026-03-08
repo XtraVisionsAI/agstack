@@ -1,3 +1,9 @@
+## 1.2.0 (2026-03-08)
+
+### Feat
+
+- add contexts module and propagate request_id to LLM calls
+
 ## 1.1.0 (2026-03-02)
 
 ### Feat
