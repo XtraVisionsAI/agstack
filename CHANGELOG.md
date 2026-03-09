@@ -1,3 +1,9 @@
+## 1.2.1 (2026-03-09)
+
+### Fix
+
+- **llm/flow**: inject tool arguments into context and handle pre-instantiated tools
+
 ## 1.2.0 (2026-03-08)
 
 ### Feat
