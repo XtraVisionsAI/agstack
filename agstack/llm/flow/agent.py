@@ -227,6 +227,13 @@ class Agent:
                     }
                     continue
 
+                # 解析 LLM 返回的工具参数并注入 context
+                try:
+                    tool_args = json.loads(tool_call["arguments"]) if tool_call["arguments"] else {}
+                except json.JSONDecodeError:
+                    tool_args = {}
+                context.update_variables(tool_args)
+
                 # 执行工具
                 result = await tool.execute_async(context)
 

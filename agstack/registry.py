@@ -144,6 +144,10 @@ class Registry:
             return None
 
         component = manifest.component
+        # 已实例化的 Tool 对象直接返回
+        if hasattr(component, "execute_async"):
+            return component
+        # 类或工厂函数：实例化
         if callable(component):
             return component(**kwargs) if kwargs else component()
         return component
