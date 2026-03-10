@@ -40,7 +40,7 @@ class CasbinRules(ObjectModel):
     created_at: Column[datetime] = column(type="datetime", default_factory=datetime.now)
 
     class Config:
-        table_name = "system_casbin_rule"
+        table_name = "system_casbin_rules"
 
 
 class SqlObjectsAdapter(AsyncAdapter, AsyncFilteredAdapter):
