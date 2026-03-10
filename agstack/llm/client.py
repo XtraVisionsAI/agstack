@@ -4,6 +4,7 @@ import logging
 import time
 from typing import TYPE_CHECKING, Any, AsyncIterator, Literal, overload
 
+import httpx
 from httpx import AsyncClient
 from httpx import Timeout as HttpxTimeout
 from openai import APIError, APITimeoutError, AsyncOpenAI, OpenAI, RateLimitError
@@ -447,7 +448,15 @@ class LLMClient:
         :param model: 模型名称
         :return: [(index, score, text), ...] 按相关性降序排列
         """
+        from httpx import ConnectTimeout, TimeoutException
 
+        @autoretry(
+            logger,
+            retries=3,
+            delay=2.0,
+            backoff=2.0,
+            exceptions=(ConnectTimeout, ConnectionError),
+        )
         async def _call():
             return await self._async_http_client.post(
                 f"{self._base_url}/reranks",
@@ -463,6 +472,7 @@ class LLMClient:
 
         try:
             response = await _call()
+            response.raise_for_status()
             data = response.json()
 
             # 解析响应
@@ -475,6 +485,17 @@ class LLMClient:
                 results.append((index, score, text))
 
             return results
+
+        except TimeoutException as e:
+            logger.error(f"Rerank timeout: {e}")
+            raise LLMTimeoutError("LLM_RERANK_TIMEOUT") from e
+
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 429:
+                logger.error(f"Rerank rate limit: {e}")
+                raise LLMRateLimitError("LLM_RERANK_RATE_LIMIT") from e
+            logger.error(f"Rerank HTTP error {e.response.status_code}: {e}")
+            raise LLMError("LLM_RERANK_ERROR", {"error": str(e)}, http_status=e.response.status_code) from e
 
         except Exception as e:
             logger.error(f"Rerank error: {e}")
@@ -495,6 +516,8 @@ class LLMClient:
         :param model: 模型名称
         :return: [(index, score, text), ...] 按相关性降序排列
         """
+        import requests
+
         session = self._get_sync_http_session()
 
         try:
@@ -521,6 +544,18 @@ class LLMClient:
                 results.append((index, score, text))
 
             return results
+
+        except requests.Timeout as e:
+            logger.error(f"Rerank timeout (sync): {e}")
+            raise LLMTimeoutError("LLM_RERANK_TIMEOUT") from e
+
+        except requests.HTTPError as e:
+            status = e.response.status_code if e.response is not None else 500
+            if status == 429:
+                logger.error(f"Rerank rate limit (sync): {e}")
+                raise LLMRateLimitError("LLM_RERANK_RATE_LIMIT") from e
+            logger.error(f"Rerank HTTP error {status} (sync): {e}")
+            raise LLMError("LLM_RERANK_ERROR", {"error": str(e)}, http_status=status) from e
 
         except Exception as e:
             logger.error(f"Rerank error (sync): {e}")
