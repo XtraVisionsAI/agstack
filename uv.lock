@@ -50,7 +50,7 @@ requires-dist = [
     { name = "python-multipart", specifier = ">=0.0.20" },
     { name = "requests", specifier = ">=2.32.5" },
     { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0.48" },
-    { name = "sqlobjects", specifier = ">=1.2.5" },
+    { name = "sqlobjects", specifier = ">=1.3.0" },
     { name = "tiktoken", specifier = ">=0.12.0" },
     { name = "uvicorn", specifier = ">=0.41.0" },
 ]
@@ -1671,14 +1671,14 @@ asyncio = [
 
 [[package]]
 name = "sqlobjects"
-version = "1.2.5"
+version = "1.3.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "sqlalchemy", extra = ["asyncio"] },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/5d/a0/59c3bbbf57788baec811b905de46f6952ea40b5fb086cb3a834b1d1ca9cf/sqlobjects-1.2.5.tar.gz", hash = "sha256:3ba9ce6b3a3789dcfd842107cd9494460f6edb0b341310f0d071e5c677e616f8", size = 162419, upload-time = "2026-03-06T00:11:11.513Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/c8/7f/9d545a767721d8cf56ccef86405d980bad18c3755e2061341e88a20ad67b/sqlobjects-1.3.0.tar.gz", hash = "sha256:841b7e1eb0b17dc8d33ad8dea1c6053fde2434e400819bf0c3d048e95767f831", size = 163753, upload-time = "2026-03-10T11:34:18.449Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/55/eb/e07befa8bb28bfd960b59f512e29c8c8080b5a52aa17e5db509c9f16afa6/sqlobjects-1.2.5-py3-none-any.whl", hash = "sha256:ce5895adc833f0d26a545bcd0845e740113a0728fdc623ceb1e49a37fca69183", size = 182872, upload-time = "2026-03-06T00:11:09.676Z" },
+    { url = "https://files.pythonhosted.org/packages/f2/d4/4ecff19d4bfb87973b4104ddc6136e60b7c72e62041f823d87051d02540f/sqlobjects-1.3.0-py3-none-any.whl", hash = "sha256:d4abf8a1fee58e2920ee252ce29733dde30c4f6983a63f0dbea1ba3a2498127b", size = 184168, upload-time = "2026-03-10T11:34:17.149Z" },
 ]
 
 [[package]]
