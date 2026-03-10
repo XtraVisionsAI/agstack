@@ -39,7 +39,6 @@ classifiers = [
 ]
 requires-python = ">=3.12"
 dependencies = [
-    "ag-ui-protocol>=0.1.13",
     "aio-pika>=9.6.1",
     "asyncpg>=0.30.0",
     "elasticsearch[async]>=9.3.0",

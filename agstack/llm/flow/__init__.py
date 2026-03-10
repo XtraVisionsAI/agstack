@@ -2,10 +2,10 @@
 
 """统一的执行框架"""
 
-# 导入示例实现
+from . import event
 from .agent import Agent
 from .context import FlowContext, Usage
-from .events import Event, EventType
+from .event import EventType
 from .exceptions import (
     AgentError,
     FlowConfigError,
@@ -33,8 +33,8 @@ __all__ = [
     "FlowContext",
     "Usage",
     # AG-UI 协议
-    "Event",
     "EventType",
+    "event",
     # 注册和工厂（registry 返回 None 失败，factory 函数抛出异常）
     "registry",
     "create_tool",

@@ -7,8 +7,9 @@ from typing import TYPE_CHECKING, Any, AsyncIterator
 from uuid import uuid4
 
 from ..client import get_llm_client
+from . import event
 from .context import Usage
-from .events import EventType
+from .event import EventType
 from .exceptions import FlowError
 
 
@@ -66,30 +67,31 @@ class Agent:
     async def run(self, context: "FlowContext") -> str:
         """执行 Agent 逻辑"""
         content_parts = []
-        async for event in self.stream(context):
+        async for evt in self.stream(context):
             # AG-UI 事件格式
-            if isinstance(event, dict):
-                if event.get("type") == EventType.TEXT_MESSAGE_CONTENT:
-                    content_parts.append(event.get("delta", ""))
-                elif event.get("type") == EventType.RUN_ERROR:
-                    raise FlowError("AGENT_EXECUTION_FAILED", 500, {"error": event.get("error")})
+            if isinstance(evt, dict):
+                if evt.get("type") == EventType.TEXT_MESSAGE_CONTENT:
+                    content_parts.append(evt.get("delta", ""))
+                elif evt.get("type") == EventType.RUN_ERROR:
+                    raise FlowError("AGENT_EXECUTION_FAILED", 500, {"error": evt.get("message")})
         return "".join(content_parts)
 
     async def stream(self, context: "FlowContext") -> AsyncIterator[dict[str, Any]]:
         """流式执行 Agent，输出 AG-UI 标准事件"""
 
-        query = context.get_variable("query", "")
-        message_id = str(uuid4())
+        # 输入来源：优先 input（A2A 传入），回退到 query
+        user_input = context.get_variable("input") or context.get_variable("query", "")
+        msg_id = context.message_id or str(uuid4())
 
-        # 添加用户消息
-        context.add_message("user", query)
+        # 添加用户消息（scoped by agent name）
+        context.add_message(self.name, "user", user_input)
         context.last_agent = self.name
 
         # AG-UI: TEXT_MESSAGE_START
-        yield {"type": EventType.TEXT_MESSAGE_START, "messageId": message_id, "role": "assistant"}
+        yield event.text_message_start(message_id=msg_id, role="assistant")
 
-        # 构建消息列表
-        messages = [self.get_system_message()] + context.messages
+        # 构建消息列表：system + 共享历史 + 当前 agent 的隔离消息
+        messages = [self.get_system_message()] + context.history + context.get_messages(self.name)
         tools_schema = self.get_tools_schema() if self.tools else None
 
         # 获取 LLM 客户端
@@ -130,11 +132,10 @@ class Agent:
                     # 内容增量 - AG-UI: TEXT_MESSAGE_CONTENT
                     if delta.content:
                         assistant_content += delta.content
-                        yield {
-                            "type": EventType.TEXT_MESSAGE_CONTENT,
-                            "messageId": message_id,
-                            "delta": delta.content,
-                        }
+                        yield event.text_message_content(
+                            message_id=msg_id,
+                            delta=delta.content,
+                        )
 
                     # 工具调用
                     if delta.tool_calls:
@@ -161,21 +162,19 @@ class Agent:
                             tool_calls.append(tool_call_data)
 
                             # TOOL_CALL_START
-                            yield {
-                                "type": EventType.TOOL_CALL_START,
-                                "toolCallId": tool_call_data["id"],
-                                "toolCallName": tool_call_data["name"],
-                            }
+                            yield event.tool_call_start(
+                                tool_call_id=tool_call_data["id"],
+                                tool_call_name=tool_call_data["name"],
+                            )
 
                             # TOOL_CALL_ARGS
-                            yield {
-                                "type": EventType.TOOL_CALL_ARGS,
-                                "toolCallId": tool_call_data["id"],
-                                "delta": tool_call_data["arguments"],
-                            }
+                            yield event.tool_call_args(
+                                tool_call_id=tool_call_data["id"],
+                                delta=tool_call_data["arguments"],
+                            )
 
                             # TOOL_CALL_END
-                            yield {"type": EventType.TOOL_CALL_END, "toolCallId": tool_call_data["id"]}
+                            yield event.tool_call_end(tool_call_id=tool_call_data["id"])
 
                         # 更新 usage
                         if hasattr(chunk, "usage") and chunk.usage:
@@ -190,23 +189,34 @@ class Agent:
             except Exception as e:
                 error_msg = str(e)
                 # AG-UI: RUN_ERROR
-                yield {"type": EventType.RUN_ERROR, "error": error_msg}
+                yield event.run_error(message=error_msg)
                 raise FlowError("AGENT_EXECUTION_FAILED", 500, {"error": error_msg}) from e
 
-            # 保存 assistant 消息
+            # 保存 assistant 消息（tool_calls 转为 OpenAI 标准格式）
             if tool_calls:
+                openai_tool_calls = [
+                    {
+                        "id": tc["id"],
+                        "type": "function",
+                        "function": {"name": tc["name"], "arguments": tc["arguments"]},
+                    }
+                    for tc in tool_calls
+                ]
                 context.add_message(
+                    self.name,
                     "assistant",
                     content=assistant_content or None,
-                    tool_calls=tool_calls,
+                    tool_calls=openai_tool_calls,
                 )
             else:
-                context.add_message("assistant", assistant_content)
+                context.add_message(self.name, "assistant", assistant_content)
 
             # 如果没有工具调用，结束循环
             if not tool_calls:
+                # 存储结果供 Flow/A2A 使用
+                context.set_node_result(self.name, assistant_content)
                 # AG-UI: TEXT_MESSAGE_END
-                yield {"type": EventType.TEXT_MESSAGE_END, "messageId": message_id}
+                yield event.text_message_end(message_id=msg_id)
                 return
 
             # 执行工具调用
@@ -215,16 +225,16 @@ class Agent:
                 if not tool:
                     error_msg = f"Tool not found: {tool_call['name']}"
                     context.add_message(
+                        self.name,
                         "tool",
                         content=json.dumps({"error": error_msg}),
                         tool_call_id=tool_call["id"],
                     )
                     # AG-UI: TOOL_CALL_RESULT (错误)
-                    yield {
-                        "type": EventType.TOOL_CALL_RESULT,
-                        "toolCallId": tool_call["id"],
-                        "content": json.dumps({"error": error_msg}),
-                    }
+                    yield event.tool_call_result(
+                        tool_call_id=tool_call["id"],
+                        content=json.dumps({"error": error_msg}),
+                    )
                     continue
 
                 # 解析 LLM 返回的工具参数并注入 context
@@ -239,10 +249,10 @@ class Agent:
 
                 # 保存工具结果
                 result_content = json.dumps(result.result) if result.success else json.dumps({"error": result.error})
-                context.add_message("tool", content=result_content, tool_call_id=tool_call["id"])
+                context.add_message(self.name, "tool", content=result_content, tool_call_id=tool_call["id"])
 
                 # AG-UI: TOOL_CALL_RESULT
-                yield {"type": EventType.TOOL_CALL_RESULT, "toolCallId": tool_call["id"], "content": result_content}
+                yield event.tool_call_result(tool_call_id=tool_call["id"], content=result_content)
 
             # 更新消息列表，继续下一轮
-            messages = [self.get_system_message()] + context.messages
+            messages = [self.get_system_message()] + context.history + context.get_messages(self.name)

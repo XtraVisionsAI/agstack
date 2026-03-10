@@ -34,13 +34,20 @@ class FlowContext:
     kb_ids: list[UUID] = field(default_factory=list)
     variables: dict[str, Any] = field(default_factory=dict)
 
-    # Agent 层面
-    messages: list[dict[str, Any]] = field(default_factory=list)
+    # Agent 层面 — 按 agent name 隔离的消息
+    messages: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
+    # 预加载的对话历史（只读，所有 agent 共享）
+    history: list[dict[str, Any]] = field(default_factory=list)
     usage: Usage = field(default_factory=Usage)
     context_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     created_at: datetime = field(default_factory=datetime.now)
     last_agent: str | None = None
     turn_count: int = 0
+
+    # 事件 ID（应用层可注入）
+    thread_id: str | None = None
+    run_id: str | None = None
+    message_id: str | None = None
 
     # 图执行状态
     node_results: dict[str, Any] = field(default_factory=dict)
@@ -65,12 +72,32 @@ class FlowContext:
         """获取特定作用域的变量"""
         return {k: v for k, v in self.variables.items() if k.startswith(f"{scope}.")}
 
-    def add_message(self, role: str, content: str | None = None, **kwargs) -> None:
-        """添加消息"""
+    def add_message(self, agent_name: str, role: str, content: str | None = None, **kwargs) -> None:
+        """添加消息到指定 agent 的消息列表"""
         message = {"role": role, **kwargs}
         if content is not None:
             message["content"] = content
-        self.messages.append(message)
+        self.messages.setdefault(agent_name, []).append(message)
+
+    def get_messages(self, agent_name: str) -> list[dict[str, Any]]:
+        """获取指定 agent 的消息列表"""
+        return self.messages.get(agent_name, [])
+
+    def get_last_output(self, agent_name: str) -> str | None:
+        """获取指定 agent 最后一条 assistant 消息的内容"""
+        agent_messages = self.messages.get(agent_name, [])
+        for msg in reversed(agent_messages):
+            if msg.get("role") == "assistant" and msg.get("content"):
+                return msg["content"]
+        return None
+
+    @property
+    def all_messages(self) -> list[dict[str, Any]]:
+        """扁平视图，合并所有 agent 消息（调试/日志用）"""
+        result: list[dict[str, Any]] = []
+        for agent_msgs in self.messages.values():
+            result.extend(agent_msgs)
+        return result
 
     def add_usage(self, usage: Usage) -> None:
         """累加 token 使用量"""
@@ -80,19 +107,26 @@ class FlowContext:
         """增加轮次计数"""
         self.turn_count += 1
 
-    def clear_messages(self) -> None:
-        """清空消息历史"""
-        self.messages.clear()
-        self.turn_count = 0
+    def clear_messages(self, agent_name: str | None = None) -> None:
+        """清空指定 agent 或全部消息历史"""
+        if agent_name is not None:
+            self.messages.pop(agent_name, None)
+        else:
+            self.messages.clear()
+            self.turn_count = 0
 
     def resolve_reference(self, ref: str) -> Any:
-        """解析变量引用 {node@variable.field}"""
+        """解析变量引用 {node@variable.field} 或 {node_id}"""
         if not isinstance(ref, str) or not ref.startswith("{"):
             return ref
 
         ref_content = ref[1:-1]  # 移除 {}
         if "@" not in ref_content:
-            return self.variables.get(ref_content)
+            # 先从 variables 查找，回退到 node_results
+            result = self.variables.get(ref_content)
+            if result is None:
+                result = self.node_results.get(ref_content)
+            return result
 
         node_id, var_path = ref_content.split("@", 1)
         result = self.node_results.get(node_id)

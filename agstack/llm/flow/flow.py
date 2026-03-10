@@ -5,7 +5,7 @@
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, AsyncIterator
 
-from .events import EventType
+from . import event
 from .exceptions import FlowError
 from .registry import registry
 
@@ -41,8 +41,7 @@ class Flow:
 
     async def stream(self, context: "FlowContext") -> AsyncIterator[dict[str, Any]]:
         """流式执行 Flow（输出 AG-UI 标准事件）"""
-        # 发送开始事件
-        yield {"type": EventType.TEXT_MESSAGE_CONTENT, "message_id": "", "delta": f"**开始执行流程**: {self.name}\n\n"}
+        yield event.step_started(step_name=f"flow:{self.name}")
 
         # 按顺序执行节点
         for node in self.nodes:
@@ -51,51 +50,39 @@ class Flow:
                 continue
 
             context.current_node = node_id
-
-            # 发送节点开始事件
-            yield {"type": EventType.TEXT_MESSAGE_CONTENT, "message_id": "", "delta": f"**执行节点**: {node_id}\n"}
+            yield event.step_started(step_name=f"node:{node_id}")
 
             # 执行节点
             if node.get("type") == "agent":
                 # Agent 节点 - 流式执行
                 agent_name = node.get("config", {}).get("agent_name", "")
-                yield {
-                    "type": EventType.TEXT_MESSAGE_CONTENT,
-                    "message_id": "",
-                    "delta": f"正在调用智能体 {agent_name}...\n\n",
-                }
+                yield event.step_started(step_name=f"agent:{agent_name}")
 
                 # 设置参数
                 self._set_parameters(node.get("config", {}), context)
 
                 # 创建并流式执行 Agent
-                agent = self._create_agent(node.get("config", {}))
-                async for event in agent.stream(context):
-                    yield event
+                ag = self._create_agent(node.get("config", {}))
+                async for evt in ag.stream(context):
+                    yield evt
 
                 # 获取最终结果
-                result = context.messages[-1]["content"] if context.messages else ""
+                result = context.get_last_output(ag.name) or ""
                 context.set_node_result(node_id, result)
 
-                yield {"type": EventType.TEXT_MESSAGE_CONTENT, "message_id": "", "delta": "\n\n智能体执行完成\n\n"}
+                yield event.step_finished(step_name=f"agent:{agent_name}")
 
             else:
                 # Tool 节点 - 非流式执行
                 tool_name = node.get("config", {}).get("tool_name", "")
-                yield {
-                    "type": EventType.TEXT_MESSAGE_CONTENT,
-                    "message_id": "",
-                    "delta": f"正在调用工具 {tool_name}...\n",
-                }
+                yield event.step_started(step_name=f"tool:{tool_name}")
 
                 result = await self._execute_node(node, context)
                 context.set_node_result(node_id, result)
 
-                yield {"type": EventType.TEXT_MESSAGE_CONTENT, "message_id": "", "delta": "工具执行完成\n\n"}
+                yield event.step_finished(step_name=f"tool:{tool_name}")
 
-        # 发送完成事件
-        yield {"type": EventType.TEXT_MESSAGE_CONTENT, "message_id": "", "delta": f"**流程执行完成**: {self.name}"}
-        yield {"type": EventType.TEXT_MESSAGE_END, "message_id": ""}
+        yield event.step_finished(step_name=f"flow:{self.name}")
 
     async def _execute_node(self, node_config: dict, context: "FlowContext") -> Any:
         """执行节点"""
