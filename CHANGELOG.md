@@ -1,3 +1,9 @@
+## 1.2.2 (2026-03-10)
+
+### Refactor
+
+- **llm/flow**: replace ag-ui-protocol dep with internal event module
+
 ## 1.2.1 (2026-03-09)
 
 ### Fix
