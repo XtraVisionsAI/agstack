@@ -1,3 +1,9 @@
+## 1.3.0 (2026-03-10)
+
+### Feat
+
+- **llm/flow**: add edge-driven execution with condition and message node support
+
 ## 1.2.3 (2026-03-10)
 
 ### Fix
