@@ -1,3 +1,10 @@
+## 1.2.3 (2026-03-10)
+
+### Fix
+
+- **security/casbin**: correct table name to system_casbin_rules
+- **llm/client**: add retry and proper error handling for rerank endpoints
+
 ## 1.2.2 (2026-03-10)
 
 ### Refactor
