@@ -1,3 +1,9 @@
+## 1.6.0 (2026-03-11)
+
+### Feat
+
+- **llm/flow**: add NodeHandler plugin system with built-in capability nodes
+
 ## 1.5.0 (2026-03-11)
 
 ### Feat
