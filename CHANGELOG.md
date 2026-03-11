@@ -1,3 +1,9 @@
+## 1.7.0 (2026-03-12)
+
+### Feat
+
+- **llm/flow**: unify node input/output with $v./$o. references and dict returns
+
 ## 1.6.0 (2026-03-11)
 
 ### Feat
