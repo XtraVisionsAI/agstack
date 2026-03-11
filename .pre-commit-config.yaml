@@ -17,6 +17,7 @@ repos:
           - pycasbin
           - pydantic
           - pytest-asyncio
+          - RestrictedPython
           - sqlalchemy[asyncio]
           - sqlobjects
           - tiktoken

@@ -9,12 +9,21 @@ from typing import TYPE_CHECKING, Any, AsyncIterator
 from uuid import uuid4
 
 from . import event
-from .exceptions import FlowError
+from .exceptions import FlowError, NodeExecutionError
 from .registry import registry
 
 
 if TYPE_CHECKING:
     from .context import FlowContext
+
+
+@dataclass
+class RetryPolicy:
+    """节点重试策略"""
+
+    max_retries: int = 0  # 0 = 不重试
+    delay: float = 1.0  # 初始延迟（秒）
+    backoff: float = 2.0  # 退避倍数
 
 
 class _SafeFormatDict(dict):
@@ -35,6 +44,21 @@ class Flow:
     edges: list[dict[str, Any]] = field(default_factory=list)
     variables: dict[str, Any] = field(default_factory=dict)
 
+    # ── 重试策略 ──
+
+    @staticmethod
+    def _get_retry_policy(node: dict) -> RetryPolicy:
+        """从节点 config 解析重试策略"""
+        config = node.get("config", {})
+        retry_cfg = config.get("retry", {})
+        if not retry_cfg:
+            return RetryPolicy()
+        return RetryPolicy(
+            max_retries=retry_cfg.get("max_retries", 0),
+            delay=retry_cfg.get("delay", 1.0),
+            backoff=retry_cfg.get("backoff", 2.0),
+        )
+
     # ── 边驱动路由 ──
 
     def _resolve_next_node(self, current_id: str, result: str | None = None) -> str | None:
@@ -46,33 +70,22 @@ class Flow:
                     return edge.get("target")
         return None
 
-    # ── condition 节点 ──
+    @staticmethod
+    def _extract_route_key(result: Any) -> str:
+        """从节点执行结果中提取路由键。
 
-    async def _evaluate_condition(self, node: dict, context: "FlowContext") -> str:
-        """调用 LLM 判断条件是否匹配"""
-        config = node.get("config", {})
-        topic = config.get("topic", "")
-        query = context.get_variable("query", "")
-
-        prompt = (
-            f"判断以下问题是否属于「{topic}」相关问题。\n"
-            f"问题：{query}\n"
-            f'仅回复 JSON：{{"result": "match"}} 或 {{"result": "reject"}}'
-        )
-
-        from ..client import get_llm_client
-
-        client = get_llm_client()
-        response = await client.chat(
-            messages=[{"role": "user", "content": prompt}],
-            model=config.get("model", "gpt-4o-mini"),
-            temperature=0,
-        )
-        text = response.choices[0].message.content or ""
+        支持 ``{"result": "qa"}`` 形式的 JSON 字符串，
+        以及纯字符串结果。
+        """
+        if not isinstance(result, str):
+            return "done"
         try:
-            return _json.loads(text).get("result", "reject")
-        except Exception:
-            return "match" if "match" in text.lower() else "reject"
+            parsed = _json.loads(result)
+            if isinstance(parsed, dict) and "result" in parsed:
+                return str(parsed["result"])
+        except (ValueError, TypeError):
+            pass
+        return result or "done"
 
     # ── message 节点 ──
 
@@ -85,6 +98,69 @@ class Flow:
         yield event.text_message_start(message_id=msg_id, role="assistant")
         yield event.text_message_content(message_id=msg_id, delta=text)
         yield event.text_message_end(message_id=msg_id)
+
+    # ── 带重试的节点执行 ──
+
+    async def _execute_node_with_retry(
+        self,
+        node: dict,
+        context: "FlowContext",
+        node_id: str,
+    ) -> AsyncIterator[dict[str, Any]]:
+        """执行节点，带重试策略，产出 AG-UI 事件"""
+        policy = self._get_retry_policy(node)
+        node_type = node.get("type")
+        config = node.get("config", {})
+        label = config.get("agent_name") or config.get("tool_name") or node_id
+        last_error: Exception | None = None
+
+        for attempt in range(policy.max_retries + 1):
+            try:
+                if attempt > 0:
+                    wait = policy.delay * (policy.backoff ** (attempt - 1))
+                    await asyncio.sleep(wait)
+                    yield event.custom(
+                        name="node_retry",
+                        value={
+                            "nodeId": node_id,
+                            "nodeType": node_type,
+                            "label": label,
+                            "attempt": attempt + 1,
+                            "maxAttempts": policy.max_retries + 1,
+                            "error": str(last_error),
+                        },
+                    )
+
+                if node_type == "agent":
+                    yield event.step_started(step_name=f"agent:{label}")
+                    self._set_parameters(config, context)
+                    ag = self._create_agent(config)
+                    async for evt in ag.stream(context):
+                        yield evt
+                    result = context.get_last_output(ag.name) or ""
+                    context.set_node_result(node_id, result)
+                    yield event.step_finished(step_name=f"agent:{label}")
+                    return
+
+                elif node_type == "tool":
+                    yield event.step_started(step_name=f"tool:{label}")
+                    result = await self._execute_node(node, context)
+                    context.set_node_result(node_id, result)
+                    yield event.step_finished(step_name=f"tool:{label}")
+                    return
+
+            except Exception as e:
+                last_error = e
+                if attempt < policy.max_retries:
+                    continue
+                yield event.run_error(
+                    message=str(e),
+                    code=type(e).__name__,
+                )
+                raise NodeExecutionError(
+                    "NODE_EXECUTION_FAILED",
+                    args={"node_id": node_id, "error": str(e)},
+                ) from e
 
     # ── 执行入口 ──
 
@@ -109,11 +185,7 @@ class Flow:
                 context.current_node = current_node_id
                 node_type = node.get("type")
 
-                if node_type == "condition":
-                    result = await self._evaluate_condition(node, context)
-                    context.set_node_result(current_node_id, result)
-                    current_node_id = self._resolve_next_node(current_node_id, result)
-                elif node_type == "message":
+                if node_type == "message":
                     config = node.get("config", {})
                     template = config.get("content", "")
                     text = template.format_map(_SafeFormatDict(context.variables))
@@ -122,7 +194,10 @@ class Flow:
                 elif node_type in ("agent", "tool"):
                     result = await self._execute_node(node, context)
                     context.set_node_result(current_node_id, result)
-                    current_node_id = self._resolve_next_node(current_node_id, "done")
+                    route_key = self._extract_route_key(result)
+                    current_node_id = self._resolve_next_node(current_node_id, route_key) or self._resolve_next_node(
+                        current_node_id, "done"
+                    )
 
                 elif node_type == "parallel":
                     config = node.get("config", {})
@@ -253,16 +328,9 @@ class Flow:
             context.current_node = node_id
             yield event.step_started(step_name=f"node:{node_id}")
 
-            if node.get("type") == "agent":
-                agent_name = node.get("config", {}).get("agent_name", "")
-                yield event.step_started(step_name=f"agent:{agent_name}")
-                self._set_parameters(node.get("config", {}), context)
-                ag = self._create_agent(node.get("config", {}))
-                async for evt in ag.stream(context):
+            if node.get("type") in ("agent", "tool"):
+                async for evt in self._execute_node_with_retry(node, context, node_id):
                     yield evt
-                result = context.get_last_output(ag.name) or ""
-                context.set_node_result(node_id, result)
-                yield event.step_finished(step_name=f"agent:{agent_name}")
             else:
                 tool_name = node.get("config", {}).get("tool_name", "")
                 yield event.step_started(step_name=f"tool:{tool_name}")
@@ -277,40 +345,37 @@ class Flow:
         while current_node_id:
             node = self.get_node_config(current_node_id)
             if not node:
-                break
+                yield event.run_error(
+                    message=f"Node not found: {current_node_id}",
+                    code="NODE_NOT_FOUND",
+                )
+                raise NodeExecutionError("NODE_NOT_FOUND", args={"node_id": current_node_id})
 
             context.current_node = current_node_id
             node_type = node.get("type")
 
-            if node_type == "condition":
-                result = await self._evaluate_condition(node, context)
-                context.set_node_result(current_node_id, result)
-                current_node_id = self._resolve_next_node(current_node_id, result)
-
-            elif node_type == "message":
+            if node_type == "message":
                 async for evt in self._emit_message(node, context):
                     yield evt
                 current_node_id = self._resolve_next_node(current_node_id, "done")
 
             elif node_type == "agent":
-                agent_name = node.get("config", {}).get("agent_name", "")
-                yield event.step_started(step_name=f"agent:{agent_name}")
-                self._set_parameters(node.get("config", {}), context)
-                ag = self._create_agent(node.get("config", {}))
-                async for evt in ag.stream(context):
+                async for evt in self._execute_node_with_retry(node, context, current_node_id):
                     yield evt
-                result = context.get_last_output(ag.name) or ""
-                context.set_node_result(current_node_id, result)
-                yield event.step_finished(step_name=f"agent:{agent_name}")
-                current_node_id = self._resolve_next_node(current_node_id, "done")
+                result = context.node_results.get(current_node_id, "")
+                route_key = self._extract_route_key(result)
+                current_node_id = self._resolve_next_node(current_node_id, route_key) or self._resolve_next_node(
+                    current_node_id, "done"
+                )
 
             elif node_type == "tool":
-                tool_name = node.get("config", {}).get("tool_name", "")
-                yield event.step_started(step_name=f"tool:{tool_name}")
-                result = await self._execute_node(node, context)
-                context.set_node_result(current_node_id, result)
-                yield event.step_finished(step_name=f"tool:{tool_name}")
-                current_node_id = self._resolve_next_node(current_node_id, "done")
+                async for evt in self._execute_node_with_retry(node, context, current_node_id):
+                    yield evt
+                result = context.node_results.get(current_node_id, "")
+                route_key = self._extract_route_key(result)
+                current_node_id = self._resolve_next_node(current_node_id, route_key) or self._resolve_next_node(
+                    current_node_id, "done"
+                )
 
             elif node_type == "parallel":
                 config = node.get("config", {})
