@@ -45,5 +45,4 @@ class LLMRerankNodeHandler(NodeHandler):
         results = [{"index": idx, "score": score, "text": text} for idx, score, text in raw_results]
 
         result = {"results": results}
-        self.map_outputs(config, context, result)
         return result

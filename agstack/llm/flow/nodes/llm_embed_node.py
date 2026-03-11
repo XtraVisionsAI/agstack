@@ -35,5 +35,4 @@ class LLMEmbedNodeHandler(NodeHandler):
         embeddings = await client.embed(texts=texts, model=model)
 
         result = {"embeddings": embeddings}
-        self.map_outputs(config, context, result)
         return result

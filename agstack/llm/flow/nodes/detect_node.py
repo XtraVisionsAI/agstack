@@ -2,7 +2,6 @@
 
 """Detect 节点 — 分类/检测，输出路由键"""
 
-import json as _json
 from typing import TYPE_CHECKING, Any
 
 from openai.types.chat import ChatCompletionMessageParam
@@ -19,10 +18,10 @@ if TYPE_CHECKING:
 class DetectNodeHandler(NodeHandler):
     """分类/检测节点
 
-    对输入文本进行分类，输出路由键。结果直接用于 _extract_route_key() 路由。
+    对输入文本进行分类，输出路由键。结果 dict 中的 ``choice`` 字段用于边路由。
 
     输入：query（待检测文本）+ instruction + options
-    输出：{"result": "<option>"} 的 JSON 字符串
+    输出：{"choice": "<option>"}
     """
 
     node_type = "detect"
@@ -76,18 +75,19 @@ class DetectNodeHandler(NodeHandler):
                 )
             )
 
-        # 尝试解析为 JSON，确保返回 {"result": "<option>"} 格式
+        # 从 LLM 响应中提取选项
+        import json as _json
+
+        option = result_text.strip()
         try:
-            parsed = _json.loads(result_text)
+            parsed = _json.loads(option)
             if isinstance(parsed, dict) and "result" in parsed:
-                return _json.dumps(parsed, ensure_ascii=False)
+                option = str(parsed["result"])
         except (ValueError, TypeError):
             pass
 
-        # 如果 LLM 返回的是纯文本选项，包装为标准格式
-        stripped = result_text.strip()
-        if stripped in options:
-            return _json.dumps({"result": stripped}, ensure_ascii=False)
+        # 如果提取的选项在合法列表中，使用它；否则用原始文本
+        if option not in options:
+            option = result_text.strip()
 
-        # 兜底：返回原始文本
-        return _json.dumps({"result": stripped}, ensure_ascii=False)
+        return {"choice": option}

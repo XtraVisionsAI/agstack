@@ -14,15 +14,9 @@ if TYPE_CHECKING:
 
 
 class ToolNodeHandler(NodeHandler):
-    """Tool 节点：通过 registry 查找 tool → tool.run(context)"""
+    """Tool 节点：通过 registry 查找 tool → tool.run(context, inputs)"""
 
     node_type = "tool"
-
-    def _set_parameters(self, config: dict, context: "FlowContext") -> None:
-        parameters = config.get("parameters", {})
-        for key, value in parameters.items():
-            resolved = context.resolve_reference(value) if isinstance(value, str) else value
-            context.set_variable(key, resolved)
 
     def _create_tool(self, config: dict):
         tool_name = config.get("tool_name")
@@ -35,6 +29,6 @@ class ToolNodeHandler(NodeHandler):
 
     async def execute(self, node: dict, context: "FlowContext") -> Any:
         config = node.get("config", {})
-        self._set_parameters(config, context)
+        resolved = self.resolve_inputs(config, context)
         tool = self._create_tool(config)
-        return await tool.run(context)
+        return await tool.run(context, inputs=resolved)

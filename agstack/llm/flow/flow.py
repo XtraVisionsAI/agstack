@@ -3,7 +3,6 @@
 """Flow 定义和执行"""
 
 import asyncio
-import json as _json
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, AsyncIterator
 from uuid import uuid4
@@ -82,27 +81,22 @@ class Flow:
 
     @staticmethod
     def _extract_route_key(result: Any) -> str:
-        """从节点执行结果中提取路由键。
+        """从节点输出 dict 中提取路由键。
 
-        支持 ``{"result": "qa"}`` 形式的 JSON 字符串，
-        以及纯字符串结果。
+        节点输出 dict 中若包含 ``choice`` 字段，即为路由键。
+        没有 ``choice`` 则默认 ``"done"``。
         """
-        if not isinstance(result, str):
-            return "done"
-        try:
-            parsed = _json.loads(result)
-            if isinstance(parsed, dict) and "result" in parsed:
-                return str(parsed["result"])
-        except (ValueError, TypeError):
-            pass
-        return result or "done"
+        if isinstance(result, dict):
+            return str(result.get("choice", "done"))
+        return "done"
 
     # ── message 节点 ──
 
     async def _emit_message(self, node: dict, context: "FlowContext") -> AsyncIterator[dict[str, Any]]:
-        """输出模板文本"""
+        """输出模板文本，支持 $v. 引用"""
         config = node.get("config", {})
         template = config.get("content", "")
+        # 用 variables 做 format_map 替换 {var} 占位符
         text = template.format_map(_SafeFormatDict(context.variables))
         msg_id = context.message_id or str(uuid4())
         yield event.text_message_start(message_id=msg_id, role="assistant")
@@ -180,7 +174,7 @@ class Flow:
                 handler = self._node_handlers.get(node_type)
                 if handler:
                     result = await handler.execute(node, context)
-                    context.set_node_result(node_id, result)
+                    context.set_output(node_id, result)
                 else:
                     raise NodeExecutionError("UNKNOWN_NODE_TYPE", args={"node_type": node_type})
         else:
@@ -197,7 +191,7 @@ class Flow:
                     config = node.get("config", {})
                     template = config.get("content", "")
                     text = template.format_map(_SafeFormatDict(context.variables))
-                    context.set_node_result(current_node_id, text)
+                    context.set_output(current_node_id, {"result": text})
                     current_node_id = self._resolve_next_node(current_node_id, "done")
 
                 elif node_type == "parallel":
@@ -213,25 +207,22 @@ class Flow:
                         branch_handler = self._node_handlers.get(branch_type)
                         if branch_handler:
                             result = await branch_handler.execute(branch_node, context)
-                            context.set_node_result(branch_id, result)
+                            context.set_output(branch_id, result)
 
                     await asyncio.gather(*[_run_branch(bid) for bid in branches])
-                    context.set_node_result(current_node_id, "done")
+                    context.set_output(current_node_id, {"choice": "done"})
                     current_node_id = self._resolve_next_node(current_node_id, "done")
 
                 elif node_type == "iteration":
                     config = node.get("config", {})
                     items_ref = config.get("items", "")
                     items = context.resolve_reference(items_ref) if isinstance(items_ref, str) else items_ref
-                    if isinstance(items, str):
-                        items = _json.loads(items)
                     if not isinstance(items, list):
                         items = [items]
 
                     item_var = config.get("item_variable", "item")
                     index_var = config.get("index_variable", "index")
                     body_nodes: list[str] = config.get("body", [])
-                    output_var = config.get("output_variable", "iteration_results")
                     results: list[Any] = []
 
                     for idx, item in enumerate(items):
@@ -245,12 +236,11 @@ class Flow:
                             body_handler = self._node_handlers.get(body_type)
                             if body_handler:
                                 body_result = await body_handler.execute(body_node, context)
-                                context.set_node_result(body_node_id, body_result)
+                                context.set_output(body_node_id, body_result)
                         if body_nodes:
-                            results.append(context.node_results.get(body_nodes[-1]))
+                            results.append(context.outputs.get(body_nodes[-1]))
 
-                    context.set_variable(output_var, results)
-                    context.set_node_result(current_node_id, _json.dumps(results, ensure_ascii=False))
+                    context.set_output(current_node_id, {"results": results})
                     current_node_id = self._resolve_next_node(current_node_id, "done")
 
                 elif node_type == "loop":
@@ -271,26 +261,20 @@ class Flow:
                             body_handler = self._node_handlers.get(body_type)
                             if body_handler:
                                 body_result = await body_handler.execute(body_node, context)
-                                context.set_node_result(body_node_id, body_result)
+                                context.set_output(body_node_id, body_result)
                         if condition_node_id:
-                            cond_result = context.node_results.get(condition_node_id, "")
-                            if isinstance(cond_result, str):
-                                try:
-                                    parsed = _json.loads(cond_result)
-                                    if isinstance(parsed, dict) and parsed.get("result") == break_cond:
-                                        break
-                                except (ValueError, TypeError):
-                                    if cond_result == break_cond:
-                                        break
+                            cond_result = context.outputs.get(condition_node_id, {})
+                            if isinstance(cond_result, dict) and cond_result.get("choice") == break_cond:
+                                break
 
-                    context.set_node_result(current_node_id, "done")
+                    context.set_output(current_node_id, {"choice": "done"})
                     current_node_id = self._resolve_next_node(current_node_id, "done")
 
                 elif node_type in self._node_handlers:
                     # 所有执行类节点统一分发
                     handler = self._node_handlers[node_type]
                     result = await handler.execute(node, context)
-                    context.set_node_result(current_node_id, result)
+                    context.set_output(current_node_id, result)
                     route_key = self._extract_route_key(result)
                     current_node_id = self._resolve_next_node(current_node_id, route_key) or self._resolve_next_node(
                         current_node_id, "done"
@@ -299,7 +283,7 @@ class Flow:
                 else:
                     raise NodeExecutionError("UNKNOWN_NODE_TYPE", args={"node_type": node_type})
 
-        return context.node_results
+        return context.outputs
 
     async def stream(self, context: "FlowContext") -> AsyncIterator[dict[str, Any]]:
         """流式执行 Flow（输出 AG-UI 标准事件）"""
@@ -371,10 +355,10 @@ class Flow:
                     branch_handler = self._node_handlers.get(branch_type)
                     if branch_handler:
                         result = await branch_handler.execute(branch_node, context)
-                        context.set_node_result(branch_id, result)
+                        context.set_output(branch_id, result)
 
                 await asyncio.gather(*[_exec_branch(bid) for bid in branches])
-                context.set_node_result(current_node_id, "done")
+                context.set_output(current_node_id, {"choice": "done"})
                 yield event.step_finished(step_name=f"parallel:{current_node_id}")
                 current_node_id = self._resolve_next_node(current_node_id, "done")
 
@@ -382,15 +366,12 @@ class Flow:
                 config = node.get("config", {})
                 items_ref = config.get("items", "")
                 items = context.resolve_reference(items_ref) if isinstance(items_ref, str) else items_ref
-                if isinstance(items, str):
-                    items = _json.loads(items)
                 if not isinstance(items, list):
                     items = [items]
 
                 item_var = config.get("item_variable", "item")
                 index_var = config.get("index_variable", "index")
                 body_nodes: list[str] = config.get("body", [])
-                output_var = config.get("output_variable", "iteration_results")
                 results: list[Any] = []
 
                 yield event.step_started(step_name=f"iteration:{current_node_id}")
@@ -405,12 +386,11 @@ class Flow:
                         body_handler = self._node_handlers.get(body_type)
                         if body_handler:
                             body_result = await body_handler.execute(body_node, context)
-                            context.set_node_result(body_node_id, body_result)
+                            context.set_output(body_node_id, body_result)
                     if body_nodes:
-                        results.append(context.node_results.get(body_nodes[-1]))
+                        results.append(context.outputs.get(body_nodes[-1]))
 
-                context.set_variable(output_var, results)
-                context.set_node_result(current_node_id, _json.dumps(results, ensure_ascii=False))
+                context.set_output(current_node_id, {"results": results})
                 yield event.step_finished(step_name=f"iteration:{current_node_id}")
                 current_node_id = self._resolve_next_node(current_node_id, "done")
 
@@ -433,20 +413,14 @@ class Flow:
                         body_handler = self._node_handlers.get(body_type)
                         if body_handler:
                             body_result = await body_handler.execute(body_node, context)
-                            context.set_node_result(body_node_id, body_result)
+                            context.set_output(body_node_id, body_result)
                     # 检查终止条件
                     if condition_node_id:
-                        cond_result = context.node_results.get(condition_node_id, "")
-                        if isinstance(cond_result, str):
-                            try:
-                                parsed = _json.loads(cond_result)
-                                if isinstance(parsed, dict) and parsed.get("result") == break_cond:
-                                    break
-                            except (ValueError, TypeError):
-                                if cond_result == break_cond:
-                                    break
+                        cond_result = context.outputs.get(condition_node_id, {})
+                        if isinstance(cond_result, dict) and cond_result.get("choice") == break_cond:
+                            break
 
-                context.set_node_result(current_node_id, "done")
+                context.set_output(current_node_id, {"choice": "done"})
                 yield event.step_finished(step_name=f"loop:{current_node_id}")
                 current_node_id = self._resolve_next_node(current_node_id, "done")
 
@@ -454,7 +428,7 @@ class Flow:
                 # 所有执行类节点统一分发
                 async for evt in self._execute_node_with_retry(node, context, current_node_id):
                     yield evt
-                result = context.node_results.get(current_node_id, "")
+                result = context.outputs.get(current_node_id, {})
                 route_key = self._extract_route_key(result)
                 current_node_id = self._resolve_next_node(current_node_id, route_key) or self._resolve_next_node(
                     current_node_id, "done"

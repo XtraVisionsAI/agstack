@@ -16,7 +16,7 @@ class ToolResult:
 
     name: str
     arguments: dict[str, Any]
-    result: Any
+    result: dict[str, Any]
     success: bool
     error: str | None = None
 
@@ -35,7 +35,7 @@ class Tool:
 
         :param name: 工具名称
         :param description: 工具描述
-        :param function: 工具函数（约定使用 context 作为唯一参数）
+        :param function: 工具函数，签名 fn(context, inputs) -> dict[str, Any]
         :param parameters: JSON Schema 参数定义（用于 LLM 调用）
         """
         self.name = name
@@ -43,27 +43,26 @@ class Tool:
         self.function = function
         self.parameters = parameters or {"type": "object", "properties": {}, "required": []}
 
-    async def execute_async(self, context: "FlowContext") -> ToolResult:
+    async def execute_async(self, context: "FlowContext", inputs: dict[str, Any] | None = None) -> ToolResult:
         """异步执行工具"""
         try:
-            # 更可靠的异步检测（Nuitka 兼容）
-            result = self.function(context)
+            result = self.function(context, inputs or {})
             if hasattr(result, "__await__"):
                 result = await result
 
-            return ToolResult(name=self.name, arguments={}, result=result, success=True)
+            return ToolResult(name=self.name, arguments=inputs or {}, result=result, success=True)
         except Exception as e:
             return ToolResult(
                 name=self.name,
-                arguments={},
-                result=None,
+                arguments=inputs or {},
+                result={},
                 success=False,
                 error=str(e),
             )
 
-    async def run(self, context: "FlowContext") -> Any:
+    async def run(self, context: "FlowContext", inputs: dict[str, Any] | None = None) -> dict[str, Any] | None:
         """执行工具"""
-        result = await self.execute_async(context)
+        result = await self.execute_async(context, inputs)
         return result.result if result.success else None
 
     def to_openai_tool(self) -> dict[str, Any]:

@@ -2,7 +2,6 @@
 
 """Python 沙箱节点处理器 — 从 sandbox.py 迁入"""
 
-import json as _json
 from typing import TYPE_CHECKING, Any
 
 from .base import NodeHandler
@@ -16,7 +15,7 @@ if TYPE_CHECKING:
 
 import builtins
 
-from RestrictedPython import compile_restricted, safe_globals
+from RestrictedPython import compile_restricted, safe_globals, utility_builtins
 from RestrictedPython.Eval import default_guarded_getitem, default_guarded_getiter
 from RestrictedPython.Guards import guarded_unpack_sequence, safer_getattr
 
@@ -45,6 +44,11 @@ def _safe_import(name: str, *args: Any, **kwargs: Any) -> Any:
     return _builtins_import(name, *args, **kwargs)
 
 
+def _full_write_guard(ob: Any) -> Any:
+    """允许对 list/dict/set 等可变容器的写操作"""
+    return ob
+
+
 def execute_python_node(code: str, inputs: dict[str, Any]) -> dict[str, Any]:
     """在 RestrictedPython 沙箱中执行用户代码
 
@@ -62,7 +66,14 @@ def execute_python_node(code: str, inputs: dict[str, Any]) -> dict[str, Any]:
     glb["_getiter_"] = default_guarded_getiter
     glb["_unpack_sequence_"] = guarded_unpack_sequence
     glb["_getattr_"] = safer_getattr
-    glb["__builtins__"] = {**glb["__builtins__"], "__import__": _safe_import}
+    glb["_write_"] = _full_write_guard
+    glb["__builtins__"] = {
+        **glb["__builtins__"],
+        **utility_builtins,
+        "list": list,
+        "dict": dict,
+        "__import__": _safe_import,
+    }
 
     loc: dict[str, Any] = {}
     exec(byte_code, glb, loc)  # noqa: S102
@@ -90,6 +101,4 @@ class PythonNodeHandler(NodeHandler):
         config = node.get("config", {})
         resolved_inputs = self.resolve_inputs(config, context)
         code_str = config.get("code", "")
-        py_result = execute_python_node(code_str, resolved_inputs)
-        self.map_outputs(config, context, py_result)
-        return _json.dumps(py_result, ensure_ascii=False)
+        return execute_python_node(code_str, resolved_inputs)

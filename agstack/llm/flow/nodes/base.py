@@ -31,14 +31,8 @@ class NodeHandler:
         inputs_spec = config.get("inputs", {})
         return {k: context.resolve_reference(v) if isinstance(v, str) else v for k, v in inputs_spec.items()}
 
-    def map_outputs(self, config: dict, context: "FlowContext", result: dict) -> None:
-        """将结果映射到 context.variables"""
-        for key in config.get("outputs", {}):
-            if isinstance(result, dict) and key in result:
-                context.set_variable(key, result[key])
-
     async def execute(self, node: dict, context: "FlowContext") -> Any:
-        """执行节点，返回结果（将存入 node_results）
+        """执行节点，返回结果（将存入 context.outputs）
 
         子类必须实现此方法。
         """
@@ -53,7 +47,5 @@ class NodeHandler:
         step_name = self.get_step_name(node, node_id)
         yield event.step_started(step_name=step_name)
         result = await self.execute(node, context)
-        context.set_node_result(node_id, result)
-        config = node.get("config", {})
-        self.map_outputs(config, context, result)
+        context.set_output(node_id, result)
         yield event.step_finished(step_name=step_name)

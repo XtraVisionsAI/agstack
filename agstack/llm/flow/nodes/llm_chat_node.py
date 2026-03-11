@@ -2,6 +2,7 @@
 
 """LLM Chat 节点 — 单轮 LLM 调用（支持流式/非流式）"""
 
+import json as _json
 from typing import TYPE_CHECKING, Any, AsyncIterator
 from uuid import uuid4
 
@@ -34,16 +35,17 @@ class LLMChatNodeHandler(NodeHandler):
 
     node_type = "llm_chat"
 
-    def _build_prompt(self, config: dict, resolved_inputs: dict[str, Any]) -> str:
-        """将 config.prompt 中的 {var} 占位符替换为 resolved 的输入值"""
-        template = config.get("prompt", "")
-        format_dict = _SafeFormatDict({k: str(v) if not isinstance(v, str) else v for k, v in resolved_inputs.items()})
+    def _build_prompt(self, template: str, resolved_inputs: dict[str, Any]) -> str:
+        """将模板中的 {var} 占位符替换为 resolved 的输入值"""
+        format_dict = _SafeFormatDict(
+            {k: v if isinstance(v, str) else _json.dumps(v, ensure_ascii=False) for k, v in resolved_inputs.items()}
+        )
         return template.format_map(format_dict)
 
     async def execute(self, node: dict, context: "FlowContext") -> Any:
         config = node.get("config", {})
         resolved_inputs = self.resolve_inputs(config, context)
-        prompt_text = self._build_prompt(config, resolved_inputs)
+        prompt_text = self._build_prompt(config.get("prompt", ""), resolved_inputs)
 
         model = config.get("model", "gpt-4o")
         temperature = config.get("temperature", 0.7)
@@ -52,10 +54,11 @@ class LLMChatNodeHandler(NodeHandler):
         client = get_llm_client()
         messages: list[ChatCompletionMessageParam] = [{"role": "user", "content": prompt_text}]
 
-        # 如果有 system_prompt，放在前面
+        # 如果有 system_prompt，支持变量替换并放在前面
         system_prompt = config.get("system_prompt")
         if system_prompt:
-            messages.insert(0, {"role": "system", "content": system_prompt})
+            system_text = self._build_prompt(system_prompt, resolved_inputs)
+            messages.insert(0, {"role": "system", "content": system_text})
 
         response = await client.chat(
             messages=messages,
@@ -78,9 +81,7 @@ class LLMChatNodeHandler(NodeHandler):
                 )
             )
 
-        result = {"result": result_text}
-        self.map_outputs(config, context, result)
-        return result_text
+        return {"result": result_text}
 
     async def stream(self, node: dict, context: "FlowContext", node_id: str) -> AsyncIterator[dict[str, Any]]:
         config = node.get("config", {})
@@ -91,7 +92,7 @@ class LLMChatNodeHandler(NodeHandler):
             step_name = self.get_step_name(node, node_id)
             yield event.step_started(step_name=step_name)
             result = await self.execute(node, context)
-            context.set_node_result(node_id, result)
+            context.set_output(node_id, result)
             yield event.step_finished(step_name=step_name)
             return
 
@@ -100,7 +101,7 @@ class LLMChatNodeHandler(NodeHandler):
         yield event.step_started(step_name=step_name)
 
         resolved_inputs = self.resolve_inputs(config, context)
-        prompt_text = self._build_prompt(config, resolved_inputs)
+        prompt_text = self._build_prompt(config.get("prompt", ""), resolved_inputs)
 
         model = config.get("model", "gpt-4o")
         temperature = config.get("temperature", 0.7)
@@ -111,7 +112,8 @@ class LLMChatNodeHandler(NodeHandler):
 
         system_prompt = config.get("system_prompt")
         if system_prompt:
-            messages.insert(0, {"role": "system", "content": system_prompt})
+            system_text = self._build_prompt(system_prompt, resolved_inputs)
+            messages.insert(0, {"role": "system", "content": system_text})
 
         msg_id = context.message_id or str(uuid4())
         yield event.text_message_start(message_id=msg_id, role="assistant")
@@ -145,8 +147,6 @@ class LLMChatNodeHandler(NodeHandler):
         yield event.text_message_end(message_id=msg_id)
 
         result_text = "".join(content_parts)
-        result = {"result": result_text}
-        self.map_outputs(config, context, result)
-        context.set_node_result(node_id, result_text)
+        context.set_output(node_id, {"result": result_text})
 
         yield event.step_finished(step_name=step_name)

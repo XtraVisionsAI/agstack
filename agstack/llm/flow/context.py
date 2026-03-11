@@ -50,7 +50,7 @@ class FlowContext:
     message_id: str | None = None
 
     # 图执行状态
-    node_results: dict[str, Any] = field(default_factory=dict)
+    outputs: dict[str, Any] = field(default_factory=dict)
     current_node: str | None = None
 
     # 执行记录（可选）
@@ -115,33 +115,31 @@ class FlowContext:
             self.messages.clear()
             self.turn_count = 0
 
-    def resolve_reference(self, ref: str) -> Any:
-        """解析变量引用 {node@variable.field} 或 {node_id}"""
-        if not isinstance(ref, str) or not ref.startswith("{"):
+    def resolve_reference(self, ref: Any) -> Any:
+        """解析变量引用
+
+        $o.node_id.field.subfield  → context.outputs["node_id"]["field"]["subfield"]
+        $v.key                     → context.variables["key"]
+        其他字符串                  → 原样返回（字面值）
+        """
+        if not isinstance(ref, str):
             return ref
-
-        ref_content = ref[1:-1]  # 移除 {}
-        if "@" not in ref_content:
-            # 先从 variables 查找，回退到 node_results
-            result = self.variables.get(ref_content)
-            if result is None:
-                result = self.node_results.get(ref_content)
+        if ref.startswith("$o."):
+            parts = ref[3:].split(".")
+            result = self.outputs.get(parts[0])
+            for part in parts[1:]:
+                if isinstance(result, dict):
+                    result = result.get(part)
+                else:
+                    result = getattr(result, part, None)
             return result
+        if ref.startswith("$v."):
+            return self.variables.get(ref[3:])
+        return ref
 
-        node_id, var_path = ref_content.split("@", 1)
-        result = self.node_results.get(node_id)
-
-        # 支持嵌套字段访问 variable.field.subfield
-        for field_name in var_path.split("."):
-            if isinstance(result, dict):
-                result = result.get(field_name)
-            else:
-                result = getattr(result, field_name, None)
-        return result
-
-    def set_node_result(self, node_id: str, result: Any):
-        """设置节点执行结果"""
-        self.node_results[node_id] = result
+    def set_output(self, node_id: str, result: Any):
+        """设置节点输出"""
+        self.outputs[node_id] = result
 
     def add_execution_record(self, task_id: str, status: str, **kwargs) -> None:
         """添加执行记录"""

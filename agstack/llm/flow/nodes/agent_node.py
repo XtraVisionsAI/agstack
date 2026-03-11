@@ -15,15 +15,9 @@ if TYPE_CHECKING:
 
 
 class AgentNodeHandler(NodeHandler):
-    """Agent 节点：通过 registry 查找 agent → ag.stream(context)"""
+    """Agent 节点：通过 registry 查找 agent → ag.stream(context, inputs)"""
 
     node_type = "agent"
-
-    def _set_parameters(self, config: dict, context: "FlowContext") -> None:
-        parameters = config.get("parameters", {})
-        for key, value in parameters.items():
-            resolved = context.resolve_reference(value) if isinstance(value, str) else value
-            context.set_variable(key, resolved)
 
     def _create_agent(self, config: dict):
         agent_name = config.get("agent_name")
@@ -36,20 +30,19 @@ class AgentNodeHandler(NodeHandler):
 
     async def execute(self, node: dict, context: "FlowContext") -> Any:
         config = node.get("config", {})
-        self._set_parameters(config, context)
+        resolved = self.resolve_inputs(config, context)
         ag = self._create_agent(config)
-        return await ag.run(context)
+        return await ag.run(context, inputs=resolved)
 
     async def stream(self, node: dict, context: "FlowContext", node_id: str) -> AsyncIterator[dict[str, Any]]:
         config = node.get("config", {})
         step_name = self.get_step_name(node, node_id)
 
         yield event.step_started(step_name=step_name)
-        self._set_parameters(config, context)
+        resolved = self.resolve_inputs(config, context)
         ag = self._create_agent(config)
-        async for evt in ag.stream(context):
+        async for evt in ag.stream(context, inputs=resolved):
             yield evt
         result = context.get_last_output(ag.name) or ""
-        context.set_node_result(node_id, result)
-        self.map_outputs(config, context, {"result": result})
+        context.set_output(node_id, {"result": result})
         yield event.step_finished(step_name=step_name)

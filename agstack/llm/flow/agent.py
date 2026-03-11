@@ -64,23 +64,29 @@ class Agent:
                 return tool
         return None
 
-    async def run(self, context: "FlowContext") -> str:
+    async def run(self, context: "FlowContext", inputs: dict[str, Any] | None = None) -> dict[str, Any]:
         """执行 Agent 逻辑"""
         content_parts = []
-        async for evt in self.stream(context):
+        async for evt in self.stream(context, inputs):
             # AG-UI 事件格式
             if isinstance(evt, dict):
                 if evt.get("type") == EventType.TEXT_MESSAGE_CONTENT:
                     content_parts.append(evt.get("delta", ""))
                 elif evt.get("type") == EventType.RUN_ERROR:
                     raise FlowError("AGENT_EXECUTION_FAILED", 500, {"error": evt.get("message")})
-        return "".join(content_parts)
+        return {"result": "".join(content_parts)}
 
-    async def stream(self, context: "FlowContext") -> AsyncIterator[dict[str, Any]]:
+    async def stream(
+        self, context: "FlowContext", inputs: dict[str, Any] | None = None
+    ) -> AsyncIterator[dict[str, Any]]:
         """流式执行 Agent，输出 AG-UI 标准事件"""
 
-        # 输入来源：优先 input（A2A 传入），回退到 query
-        user_input = context.get_variable("input") or context.get_variable("query", "")
+        # 输入来源：优先 inputs 参数，回退到 context.variables
+        user_input = ""
+        if inputs:
+            user_input = inputs.get("input", "")
+        if not user_input:
+            user_input = context.get_variable("input") or context.get_variable("query", "")
         msg_id = context.message_id or str(uuid4())
 
         # 添加用户消息（scoped by agent name）
@@ -214,7 +220,7 @@ class Agent:
             # 如果没有工具调用，结束循环
             if not tool_calls:
                 # 存储结果供 Flow/A2A 使用
-                context.set_node_result(self.name, assistant_content)
+                context.set_output(self.name, {"result": assistant_content})
                 # AG-UI: TEXT_MESSAGE_END
                 yield event.text_message_end(message_id=msg_id)
                 return
@@ -237,15 +243,14 @@ class Agent:
                     )
                     continue
 
-                # 解析 LLM 返回的工具参数并注入 context
+                # 解析 LLM 返回的工具参数
                 try:
                     tool_args = json.loads(tool_call["arguments"]) if tool_call["arguments"] else {}
                 except json.JSONDecodeError:
                     tool_args = {}
-                context.update_variables(tool_args)
 
-                # 执行工具
-                result = await tool.execute_async(context)
+                # 执行工具（传入 LLM 解析的参数作为 inputs）
+                result = await tool.execute_async(context, tool_args)
 
                 # 保存工具结果
                 result_content = json.dumps(result.result) if result.success else json.dumps({"error": result.error})
