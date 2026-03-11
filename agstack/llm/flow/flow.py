@@ -2,6 +2,7 @@
 
 """Flow 定义和执行"""
 
+import asyncio
 import json as _json
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, AsyncIterator
@@ -122,6 +123,106 @@ class Flow:
                     result = await self._execute_node(node, context)
                     context.set_node_result(current_node_id, result)
                     current_node_id = self._resolve_next_node(current_node_id, "done")
+
+                elif node_type == "parallel":
+                    config = node.get("config", {})
+                    branches: list[str] = config.get("branches", [])
+
+                    async def _run_branch(branch_id: str) -> None:
+                        branch_node = self.get_node_config(branch_id)
+                        if not branch_node:
+                            return
+                        context.current_node = branch_id
+                        self._set_parameters(branch_node.get("config", {}), context)
+                        result = await self._execute_node(branch_node, context)
+                        context.set_node_result(branch_id, result)
+
+                    await asyncio.gather(*[_run_branch(bid) for bid in branches])
+                    context.set_node_result(current_node_id, "done")
+                    current_node_id = self._resolve_next_node(current_node_id, "done")
+
+                elif node_type == "iteration":
+                    config = node.get("config", {})
+                    items_ref = config.get("items", "")
+                    items = context.resolve_reference(items_ref) if isinstance(items_ref, str) else items_ref
+                    if isinstance(items, str):
+                        items = _json.loads(items)
+                    if not isinstance(items, list):
+                        items = [items]
+
+                    item_var = config.get("item_variable", "item")
+                    index_var = config.get("index_variable", "index")
+                    body_nodes: list[str] = config.get("body", [])
+                    output_var = config.get("output_variable", "iteration_results")
+                    results: list[Any] = []
+
+                    for idx, item in enumerate(items):
+                        context.set_variable(item_var, item)
+                        context.set_variable(index_var, idx)
+                        for body_node_id in body_nodes:
+                            body_node = self.get_node_config(body_node_id)
+                            if not body_node:
+                                continue
+                            self._set_parameters(body_node.get("config", {}), context)
+                            body_result = await self._execute_node(body_node, context)
+                            context.set_node_result(body_node_id, body_result)
+                        if body_nodes:
+                            results.append(context.node_results.get(body_nodes[-1]))
+
+                    context.set_variable(output_var, results)
+                    context.set_node_result(current_node_id, _json.dumps(results, ensure_ascii=False))
+                    current_node_id = self._resolve_next_node(current_node_id, "done")
+
+                elif node_type == "loop":
+                    config = node.get("config", {})
+                    body_nodes_l: list[str] = config.get("body", [])
+                    condition_node_id = config.get("condition_node")
+                    break_cond = config.get("break_condition", "done")
+                    max_iter = config.get("max_iterations", 10)
+                    loop_var = config.get("loop_variable", "loop_count")
+
+                    for iteration in range(max_iter):
+                        context.set_variable(loop_var, iteration)
+                        for body_node_id in body_nodes_l:
+                            body_node = self.get_node_config(body_node_id)
+                            if not body_node:
+                                continue
+                            self._set_parameters(body_node.get("config", {}), context)
+                            body_result = await self._execute_node(body_node, context)
+                            context.set_node_result(body_node_id, body_result)
+                        if condition_node_id:
+                            cond_result = context.node_results.get(condition_node_id, "")
+                            if isinstance(cond_result, str):
+                                try:
+                                    parsed = _json.loads(cond_result)
+                                    if isinstance(parsed, dict) and parsed.get("result") == break_cond:
+                                        break
+                                except (ValueError, TypeError):
+                                    if cond_result == break_cond:
+                                        break
+
+                    context.set_node_result(current_node_id, "done")
+                    current_node_id = self._resolve_next_node(current_node_id, "done")
+
+                elif node_type == "python":
+                    config = node.get("config", {})
+                    inputs_spec: dict[str, Any] = config.get("inputs", {})
+                    resolved_inputs: dict[str, Any] = {}
+                    for key, ref in inputs_spec.items():
+                        resolved_inputs[key] = context.resolve_reference(ref) if isinstance(ref, str) else ref
+
+                    from .sandbox import execute_python_node
+
+                    code_str = config.get("code", "")
+                    py_result = execute_python_node(code_str, resolved_inputs)
+
+                    outputs_spec: dict[str, Any] = config.get("outputs", {})
+                    for key in outputs_spec:
+                        if key in py_result:
+                            context.set_variable(key, py_result[key])
+
+                    context.set_node_result(current_node_id, _json.dumps(py_result, ensure_ascii=False))
+                    current_node_id = self._resolve_next_node(current_node_id, "done")
                 else:
                     break
 
@@ -209,6 +310,119 @@ class Flow:
                 result = await self._execute_node(node, context)
                 context.set_node_result(current_node_id, result)
                 yield event.step_finished(step_name=f"tool:{tool_name}")
+                current_node_id = self._resolve_next_node(current_node_id, "done")
+
+            elif node_type == "parallel":
+                config = node.get("config", {})
+                branches = config.get("branches", [])
+                yield event.step_started(step_name=f"parallel:{current_node_id}")
+
+                async def _exec_branch(branch_id: str) -> None:
+                    branch_node = self.get_node_config(branch_id)
+                    if not branch_node:
+                        return
+                    context.current_node = branch_id
+                    self._set_parameters(branch_node.get("config", {}), context)
+                    result = await self._execute_node(branch_node, context)
+                    context.set_node_result(branch_id, result)
+
+                await asyncio.gather(*[_exec_branch(bid) for bid in branches])
+                context.set_node_result(current_node_id, "done")
+                yield event.step_finished(step_name=f"parallel:{current_node_id}")
+                current_node_id = self._resolve_next_node(current_node_id, "done")
+
+            elif node_type == "iteration":
+                config = node.get("config", {})
+                items_ref = config.get("items", "")
+                items = context.resolve_reference(items_ref) if isinstance(items_ref, str) else items_ref
+                if isinstance(items, str):
+                    items = _json.loads(items)
+                if not isinstance(items, list):
+                    items = [items]
+
+                item_var = config.get("item_variable", "item")
+                index_var = config.get("index_variable", "index")
+                body_nodes: list[str] = config.get("body", [])
+                output_var = config.get("output_variable", "iteration_results")
+                results: list[Any] = []
+
+                yield event.step_started(step_name=f"iteration:{current_node_id}")
+                for idx, item in enumerate(items):
+                    context.set_variable(item_var, item)
+                    context.set_variable(index_var, idx)
+                    for body_node_id in body_nodes:
+                        body_node = self.get_node_config(body_node_id)
+                        if not body_node:
+                            continue
+                        self._set_parameters(body_node.get("config", {}), context)
+                        body_result = await self._execute_node(body_node, context)
+                        context.set_node_result(body_node_id, body_result)
+                    if body_nodes:
+                        results.append(context.node_results.get(body_nodes[-1]))
+
+                context.set_variable(output_var, results)
+                context.set_node_result(current_node_id, _json.dumps(results, ensure_ascii=False))
+                yield event.step_finished(step_name=f"iteration:{current_node_id}")
+                current_node_id = self._resolve_next_node(current_node_id, "done")
+
+            elif node_type == "loop":
+                config = node.get("config", {})
+                body_nodes_l: list[str] = config.get("body", [])
+                condition_node_id = config.get("condition_node")
+                break_cond = config.get("break_condition", "done")
+                max_iter = config.get("max_iterations", 10)
+                loop_var = config.get("loop_variable", "loop_count")
+
+                yield event.step_started(step_name=f"loop:{current_node_id}")
+                for iteration in range(max_iter):
+                    context.set_variable(loop_var, iteration)
+                    for body_node_id in body_nodes_l:
+                        body_node = self.get_node_config(body_node_id)
+                        if not body_node:
+                            continue
+                        self._set_parameters(body_node.get("config", {}), context)
+                        body_result = await self._execute_node(body_node, context)
+                        context.set_node_result(body_node_id, body_result)
+                    # 检查终止条件
+                    if condition_node_id:
+                        cond_result = context.node_results.get(condition_node_id, "")
+                        if isinstance(cond_result, str):
+                            try:
+                                parsed = _json.loads(cond_result)
+                                if isinstance(parsed, dict) and parsed.get("result") == break_cond:
+                                    break
+                            except (ValueError, TypeError):
+                                if cond_result == break_cond:
+                                    break
+
+                context.set_node_result(current_node_id, "done")
+                yield event.step_finished(step_name=f"loop:{current_node_id}")
+                current_node_id = self._resolve_next_node(current_node_id, "done")
+
+            elif node_type == "python":
+                config = node.get("config", {})
+                yield event.step_started(step_name=f"python:{current_node_id}")
+
+                # 解析 inputs
+                inputs_spec: dict[str, Any] = config.get("inputs", {})
+                resolved_inputs: dict[str, Any] = {}
+                for key, ref in inputs_spec.items():
+                    resolved_inputs[key] = context.resolve_reference(ref) if isinstance(ref, str) else ref
+
+                # 沙箱执行
+                from .sandbox import execute_python_node
+
+                code_str = config.get("code", "")
+                py_result = execute_python_node(code_str, resolved_inputs)
+
+                # 映射 outputs 到 context.variables
+                outputs_spec: dict[str, Any] = config.get("outputs", {})
+                for key in outputs_spec:
+                    if key in py_result:
+                        context.set_variable(key, py_result[key])
+
+                context.set_node_result(current_node_id, _json.dumps(py_result, ensure_ascii=False))
+                yield event.step_finished(step_name=f"python:{current_node_id}")
                 current_node_id = self._resolve_next_node(current_node_id, "done")
 
             else:
