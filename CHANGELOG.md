@@ -1,3 +1,9 @@
+## 1.4.0 (2026-03-11)
+
+### Feat
+
+- **llm/flow**: add parallel, iteration, loop, and python node types
+
 ## 1.3.0 (2026-03-10)
 
 ### Feat
