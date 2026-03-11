@@ -1,3 +1,9 @@
+## 1.5.0 (2026-03-11)
+
+### Feat
+
+- **llm/flow**: add node-level retry with error events, routing and python sandbox
+
 ## 1.4.0 (2026-03-11)
 
 ### Feat
