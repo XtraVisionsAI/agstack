@@ -1,4 +1,4 @@
-#  Copyright (c) 2020-2025 XtraVisions, All rights reserved.
+#  Copyright (c) 2020-2026 XtraVisions, All rights reserved.
 
 """Flow 定义和执行"""
 
@@ -9,12 +9,12 @@ from typing import TYPE_CHECKING, Any, AsyncIterator
 from uuid import uuid4
 
 from . import event
-from .exceptions import FlowError, NodeExecutionError
-from .registry import registry
+from .exceptions import NodeExecutionError
 
 
 if TYPE_CHECKING:
     from .context import FlowContext
+    from .nodes.base import NodeHandler
 
 
 @dataclass
@@ -43,6 +43,16 @@ class Flow:
     nodes: list[dict[str, Any]] = field(default_factory=list)
     edges: list[dict[str, Any]] = field(default_factory=list)
     variables: dict[str, Any] = field(default_factory=dict)
+
+    _node_handlers: dict[str, "NodeHandler"] = field(default_factory=dict, init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        from .nodes import _global_node_handlers, builtin_handlers
+
+        for handler in builtin_handlers:
+            self._node_handlers[handler.node_type] = handler
+        # 全局注册的自定义 handler 可覆盖内置
+        self._node_handlers.update(_global_node_handlers)
 
     # ── 重试策略 ──
 
@@ -99,7 +109,7 @@ class Flow:
         yield event.text_message_content(message_id=msg_id, delta=text)
         yield event.text_message_end(message_id=msg_id)
 
-    # ── 带重试的节点执行 ──
+    # ── 带重试的节点执行（统一走 NodeHandler） ──
 
     async def _execute_node_with_retry(
         self,
@@ -108,10 +118,17 @@ class Flow:
         node_id: str,
     ) -> AsyncIterator[dict[str, Any]]:
         """执行节点，带重试策略，产出 AG-UI 事件"""
+        node_type: str = node.get("type", "")
+        handler = self._node_handlers.get(node_type)
+        if not handler:
+            yield event.run_error(
+                message=f"Unknown node type: {node_type}",
+                code="UNKNOWN_NODE_TYPE",
+            )
+            raise NodeExecutionError("UNKNOWN_NODE_TYPE", args={"node_type": node_type})
+
         policy = self._get_retry_policy(node)
-        node_type = node.get("type")
-        config = node.get("config", {})
-        label = config.get("agent_name") or config.get("tool_name") or node_id
+        label = handler.get_step_name(node, node_id)
         last_error: Exception | None = None
 
         for attempt in range(policy.max_retries + 1):
@@ -131,23 +148,9 @@ class Flow:
                         },
                     )
 
-                if node_type == "agent":
-                    yield event.step_started(step_name=f"agent:{label}")
-                    self._set_parameters(config, context)
-                    ag = self._create_agent(config)
-                    async for evt in ag.stream(context):
-                        yield evt
-                    result = context.get_last_output(ag.name) or ""
-                    context.set_node_result(node_id, result)
-                    yield event.step_finished(step_name=f"agent:{label}")
-                    return
-
-                elif node_type == "tool":
-                    yield event.step_started(step_name=f"tool:{label}")
-                    result = await self._execute_node(node, context)
-                    context.set_node_result(node_id, result)
-                    yield event.step_finished(step_name=f"tool:{label}")
-                    return
+                async for evt in handler.stream(node, context, node_id):
+                    yield evt
+                return
 
             except Exception as e:
                 last_error = e
@@ -173,8 +176,13 @@ class Flow:
                 if not node_id:
                     continue
                 context.current_node = node_id
-                result = await self._execute_node(node, context)
-                context.set_node_result(node_id, result)
+                node_type: str = node.get("type", "")
+                handler = self._node_handlers.get(node_type)
+                if handler:
+                    result = await handler.execute(node, context)
+                    context.set_node_result(node_id, result)
+                else:
+                    raise NodeExecutionError("UNKNOWN_NODE_TYPE", args={"node_type": node_type})
         else:
             # edge 驱动执行
             current_node_id: str | None = self.nodes[0]["id"] if self.nodes else None
@@ -183,7 +191,7 @@ class Flow:
                 if not node:
                     break
                 context.current_node = current_node_id
-                node_type = node.get("type")
+                node_type: str = node.get("type", "")
 
                 if node_type == "message":
                     config = node.get("config", {})
@@ -191,13 +199,6 @@ class Flow:
                     text = template.format_map(_SafeFormatDict(context.variables))
                     context.set_node_result(current_node_id, text)
                     current_node_id = self._resolve_next_node(current_node_id, "done")
-                elif node_type in ("agent", "tool"):
-                    result = await self._execute_node(node, context)
-                    context.set_node_result(current_node_id, result)
-                    route_key = self._extract_route_key(result)
-                    current_node_id = self._resolve_next_node(current_node_id, route_key) or self._resolve_next_node(
-                        current_node_id, "done"
-                    )
 
                 elif node_type == "parallel":
                     config = node.get("config", {})
@@ -208,9 +209,11 @@ class Flow:
                         if not branch_node:
                             return
                         context.current_node = branch_id
-                        self._set_parameters(branch_node.get("config", {}), context)
-                        result = await self._execute_node(branch_node, context)
-                        context.set_node_result(branch_id, result)
+                        branch_type: str = branch_node.get("type", "")
+                        branch_handler = self._node_handlers.get(branch_type)
+                        if branch_handler:
+                            result = await branch_handler.execute(branch_node, context)
+                            context.set_node_result(branch_id, result)
 
                     await asyncio.gather(*[_run_branch(bid) for bid in branches])
                     context.set_node_result(current_node_id, "done")
@@ -238,9 +241,11 @@ class Flow:
                             body_node = self.get_node_config(body_node_id)
                             if not body_node:
                                 continue
-                            self._set_parameters(body_node.get("config", {}), context)
-                            body_result = await self._execute_node(body_node, context)
-                            context.set_node_result(body_node_id, body_result)
+                            body_type: str = body_node.get("type", "")
+                            body_handler = self._node_handlers.get(body_type)
+                            if body_handler:
+                                body_result = await body_handler.execute(body_node, context)
+                                context.set_node_result(body_node_id, body_result)
                         if body_nodes:
                             results.append(context.node_results.get(body_nodes[-1]))
 
@@ -262,9 +267,11 @@ class Flow:
                             body_node = self.get_node_config(body_node_id)
                             if not body_node:
                                 continue
-                            self._set_parameters(body_node.get("config", {}), context)
-                            body_result = await self._execute_node(body_node, context)
-                            context.set_node_result(body_node_id, body_result)
+                            body_type: str = body_node.get("type", "")
+                            body_handler = self._node_handlers.get(body_type)
+                            if body_handler:
+                                body_result = await body_handler.execute(body_node, context)
+                                context.set_node_result(body_node_id, body_result)
                         if condition_node_id:
                             cond_result = context.node_results.get(condition_node_id, "")
                             if isinstance(cond_result, str):
@@ -279,27 +286,18 @@ class Flow:
                     context.set_node_result(current_node_id, "done")
                     current_node_id = self._resolve_next_node(current_node_id, "done")
 
-                elif node_type == "python":
-                    config = node.get("config", {})
-                    inputs_spec: dict[str, Any] = config.get("inputs", {})
-                    resolved_inputs: dict[str, Any] = {}
-                    for key, ref in inputs_spec.items():
-                        resolved_inputs[key] = context.resolve_reference(ref) if isinstance(ref, str) else ref
+                elif node_type in self._node_handlers:
+                    # 所有执行类节点统一分发
+                    handler = self._node_handlers[node_type]
+                    result = await handler.execute(node, context)
+                    context.set_node_result(current_node_id, result)
+                    route_key = self._extract_route_key(result)
+                    current_node_id = self._resolve_next_node(current_node_id, route_key) or self._resolve_next_node(
+                        current_node_id, "done"
+                    )
 
-                    from .sandbox import execute_python_node
-
-                    code_str = config.get("code", "")
-                    py_result = execute_python_node(code_str, resolved_inputs)
-
-                    outputs_spec: dict[str, Any] = config.get("outputs", {})
-                    for key in outputs_spec:
-                        if key in py_result:
-                            context.set_variable(key, py_result[key])
-
-                    context.set_node_result(current_node_id, _json.dumps(py_result, ensure_ascii=False))
-                    current_node_id = self._resolve_next_node(current_node_id, "done")
                 else:
-                    break
+                    raise NodeExecutionError("UNKNOWN_NODE_TYPE", args={"node_type": node_type})
 
         return context.node_results
 
@@ -326,17 +324,17 @@ class Flow:
                 continue
 
             context.current_node = node_id
-            yield event.step_started(step_name=f"node:{node_id}")
+            node_type: str = node.get("type", "")
 
-            if node.get("type") in ("agent", "tool"):
+            if node_type in self._node_handlers:
                 async for evt in self._execute_node_with_retry(node, context, node_id):
                     yield evt
             else:
-                tool_name = node.get("config", {}).get("tool_name", "")
-                yield event.step_started(step_name=f"tool:{tool_name}")
-                result = await self._execute_node(node, context)
-                context.set_node_result(node_id, result)
-                yield event.step_finished(step_name=f"tool:{tool_name}")
+                yield event.run_error(
+                    message=f"Unknown node type: {node_type}",
+                    code="UNKNOWN_NODE_TYPE",
+                )
+                raise NodeExecutionError("UNKNOWN_NODE_TYPE", args={"node_type": node_type})
 
     async def _stream_edge_driven(self, context: "FlowContext") -> AsyncIterator[dict[str, Any]]:
         """边驱动流式执行"""
@@ -352,30 +350,12 @@ class Flow:
                 raise NodeExecutionError("NODE_NOT_FOUND", args={"node_id": current_node_id})
 
             context.current_node = current_node_id
-            node_type = node.get("type")
+            node_type: str = node.get("type", "")
 
             if node_type == "message":
                 async for evt in self._emit_message(node, context):
                     yield evt
                 current_node_id = self._resolve_next_node(current_node_id, "done")
-
-            elif node_type == "agent":
-                async for evt in self._execute_node_with_retry(node, context, current_node_id):
-                    yield evt
-                result = context.node_results.get(current_node_id, "")
-                route_key = self._extract_route_key(result)
-                current_node_id = self._resolve_next_node(current_node_id, route_key) or self._resolve_next_node(
-                    current_node_id, "done"
-                )
-
-            elif node_type == "tool":
-                async for evt in self._execute_node_with_retry(node, context, current_node_id):
-                    yield evt
-                result = context.node_results.get(current_node_id, "")
-                route_key = self._extract_route_key(result)
-                current_node_id = self._resolve_next_node(current_node_id, route_key) or self._resolve_next_node(
-                    current_node_id, "done"
-                )
 
             elif node_type == "parallel":
                 config = node.get("config", {})
@@ -387,9 +367,11 @@ class Flow:
                     if not branch_node:
                         return
                     context.current_node = branch_id
-                    self._set_parameters(branch_node.get("config", {}), context)
-                    result = await self._execute_node(branch_node, context)
-                    context.set_node_result(branch_id, result)
+                    branch_type = branch_node.get("type", "")
+                    branch_handler = self._node_handlers.get(branch_type)
+                    if branch_handler:
+                        result = await branch_handler.execute(branch_node, context)
+                        context.set_node_result(branch_id, result)
 
                 await asyncio.gather(*[_exec_branch(bid) for bid in branches])
                 context.set_node_result(current_node_id, "done")
@@ -419,9 +401,11 @@ class Flow:
                         body_node = self.get_node_config(body_node_id)
                         if not body_node:
                             continue
-                        self._set_parameters(body_node.get("config", {}), context)
-                        body_result = await self._execute_node(body_node, context)
-                        context.set_node_result(body_node_id, body_result)
+                        body_type = body_node.get("type", "")
+                        body_handler = self._node_handlers.get(body_type)
+                        if body_handler:
+                            body_result = await body_handler.execute(body_node, context)
+                            context.set_node_result(body_node_id, body_result)
                     if body_nodes:
                         results.append(context.node_results.get(body_nodes[-1]))
 
@@ -445,9 +429,11 @@ class Flow:
                         body_node = self.get_node_config(body_node_id)
                         if not body_node:
                             continue
-                        self._set_parameters(body_node.get("config", {}), context)
-                        body_result = await self._execute_node(body_node, context)
-                        context.set_node_result(body_node_id, body_result)
+                        body_type = body_node.get("type", "")
+                        body_handler = self._node_handlers.get(body_type)
+                        if body_handler:
+                            body_result = await body_handler.execute(body_node, context)
+                            context.set_node_result(body_node_id, body_result)
                     # 检查终止条件
                     if condition_node_id:
                         cond_result = context.node_results.get(condition_node_id, "")
@@ -464,84 +450,22 @@ class Flow:
                 yield event.step_finished(step_name=f"loop:{current_node_id}")
                 current_node_id = self._resolve_next_node(current_node_id, "done")
 
-            elif node_type == "python":
-                config = node.get("config", {})
-                yield event.step_started(step_name=f"python:{current_node_id}")
-
-                # 解析 inputs
-                inputs_spec: dict[str, Any] = config.get("inputs", {})
-                resolved_inputs: dict[str, Any] = {}
-                for key, ref in inputs_spec.items():
-                    resolved_inputs[key] = context.resolve_reference(ref) if isinstance(ref, str) else ref
-
-                # 沙箱执行
-                from .sandbox import execute_python_node
-
-                code_str = config.get("code", "")
-                py_result = execute_python_node(code_str, resolved_inputs)
-
-                # 映射 outputs 到 context.variables
-                outputs_spec: dict[str, Any] = config.get("outputs", {})
-                for key in outputs_spec:
-                    if key in py_result:
-                        context.set_variable(key, py_result[key])
-
-                context.set_node_result(current_node_id, _json.dumps(py_result, ensure_ascii=False))
-                yield event.step_finished(step_name=f"python:{current_node_id}")
-                current_node_id = self._resolve_next_node(current_node_id, "done")
+            elif node_type in self._node_handlers:
+                # 所有执行类节点统一分发
+                async for evt in self._execute_node_with_retry(node, context, current_node_id):
+                    yield evt
+                result = context.node_results.get(current_node_id, "")
+                route_key = self._extract_route_key(result)
+                current_node_id = self._resolve_next_node(current_node_id, route_key) or self._resolve_next_node(
+                    current_node_id, "done"
+                )
 
             else:
-                break
-
-    async def _execute_node(self, node_config: dict, context: "FlowContext") -> Any:
-        """执行节点"""
-        node_type = node_config.get("type")
-        config = node_config.get("config", {})
-
-        # 设置参数到 context
-        self._set_parameters(config, context)
-
-        # 创建并执行 runnable
-        if node_type == "agent":
-            runnable = self._create_agent(config)
-        elif node_type == "tool":
-            runnable = self._create_tool(config)
-        else:
-            raise FlowError("UNKNOWN_NODE_TYPE", 400, {"type": node_type})
-
-        return await runnable.run(context)
-
-    def _set_parameters(self, config: dict, context: "FlowContext") -> None:
-        """设置参数到 context"""
-        parameters = config.get("parameters", {})
-
-        for key, value in parameters.items():
-            resolved_value = context.resolve_reference(value) if isinstance(value, str) else value
-            context.set_variable(key, resolved_value)
-
-    def _create_agent(self, config: dict):
-        """创建 Agent"""
-        agent_name = config.get("agent_name")
-        if not agent_name:
-            raise FlowError("MISSING_AGENT_NAME", 400)
-
-        agent = registry.create_agent(agent_name)
-        if not agent:
-            raise FlowError("AGENT_NOT_FOUND", 404, {"agent_name": agent_name})
-
-        return agent
-
-    def _create_tool(self, config: dict):
-        """创建 Tool"""
-        tool_name = config.get("tool_name")
-        if not tool_name:
-            raise FlowError("MISSING_TOOL_NAME", 400)
-
-        tool = registry.create_tool(tool_name)
-        if not tool:
-            raise FlowError("TOOL_NOT_FOUND", 404, {"tool_name": tool_name})
-
-        return tool
+                yield event.run_error(
+                    message=f"Unknown node type: {node_type}",
+                    code="UNKNOWN_NODE_TYPE",
+                )
+                raise NodeExecutionError("UNKNOWN_NODE_TYPE", args={"node_type": node_type})
 
     def get_node_config(self, node_id: str) -> dict[str, Any] | None:
         """获取节点配置"""

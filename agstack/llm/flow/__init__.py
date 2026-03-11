@@ -18,6 +18,7 @@ from .exceptions import (
 from .factory import create_agent, create_tool
 from .flow import Flow
 from .loader import FlowLoader
+from .nodes import NodeHandler, register_node_handler
 from .records import Record, Status
 from .registry import registry
 from .state import FlowState
@@ -32,6 +33,9 @@ __all__ = [
     "Flow",
     "FlowContext",
     "Usage",
+    # 节点处理器
+    "NodeHandler",
+    "register_node_handler",
     # AG-UI 协议
     "EventType",
     "event",

@@ -1,0 +1,40 @@
+#  Copyright (c) 2020-2026 XtraVisions, All rights reserved.
+
+"""Tool 节点处理器 — 从 flow.py 提取"""
+
+from typing import TYPE_CHECKING, Any
+
+from ..exceptions import FlowError
+from ..registry import registry
+from .base import NodeHandler
+
+
+if TYPE_CHECKING:
+    from ..context import FlowContext
+
+
+class ToolNodeHandler(NodeHandler):
+    """Tool 节点：通过 registry 查找 tool → tool.run(context)"""
+
+    node_type = "tool"
+
+    def _set_parameters(self, config: dict, context: "FlowContext") -> None:
+        parameters = config.get("parameters", {})
+        for key, value in parameters.items():
+            resolved = context.resolve_reference(value) if isinstance(value, str) else value
+            context.set_variable(key, resolved)
+
+    def _create_tool(self, config: dict):
+        tool_name = config.get("tool_name")
+        if not tool_name:
+            raise FlowError("MISSING_TOOL_NAME", 400)
+        tool = registry.create_tool(tool_name)
+        if not tool:
+            raise FlowError("TOOL_NOT_FOUND", 404, {"tool_name": tool_name})
+        return tool
+
+    async def execute(self, node: dict, context: "FlowContext") -> Any:
+        config = node.get("config", {})
+        self._set_parameters(config, context)
+        tool = self._create_tool(config)
+        return await tool.run(context)
