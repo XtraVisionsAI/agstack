@@ -1,3 +1,9 @@
+## 1.8.0 (2026-03-16)
+
+### Feat
+
+- **registry**: replace global Registry with self-contained FlowRegistry
+
 ## 1.7.0 (2026-03-12)
 
 ### Feat
