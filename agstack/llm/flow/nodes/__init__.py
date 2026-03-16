@@ -23,17 +23,7 @@ builtin_handlers: list[NodeHandler] = [
     DetectNodeHandler(),
 ]
 
-# 全局自定义节点注册
-_global_node_handlers: dict[str, NodeHandler] = {}
-
-
-def register_node_handler(node_type: str, handler: NodeHandler) -> None:
-    """注册自定义节点处理器（全局，所有 Flow 实例共享）"""
-    _global_node_handlers[node_type] = handler
-
-
 __all__ = [
     "NodeHandler",
     "builtin_handlers",
-    "register_node_handler",
 ]

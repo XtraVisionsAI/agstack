@@ -18,12 +18,14 @@ from .exceptions import (
 from .factory import create_agent, create_tool
 from .flow import Flow
 from .loader import FlowLoader
-from .nodes import NodeHandler, register_node_handler
+from .nodes import NodeHandler
 from .records import Record, Status
 from .registry import registry
 from .state import FlowState
 from .tool import Tool, ToolResult
 
+
+register_node_handler = registry.register_node_handler
 
 __all__ = [
     # 核心抽象

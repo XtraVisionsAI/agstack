@@ -46,12 +46,9 @@ class Flow:
     _node_handlers: dict[str, "NodeHandler"] = field(default_factory=dict, init=False, repr=False)
 
     def __post_init__(self) -> None:
-        from .nodes import _global_node_handlers, builtin_handlers
+        from .registry import registry
 
-        for handler in builtin_handlers:
-            self._node_handlers[handler.node_type] = handler
-        # 全局注册的自定义 handler 可覆盖内置
-        self._node_handlers.update(_global_node_handlers)
+        self._node_handlers = dict(registry.get_all_node_handlers())
 
     # ── 重试策略 ──
 
