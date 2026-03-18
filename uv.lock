@@ -4,7 +4,7 @@ requires-python = ">=3.12"
 
 [[package]]
 name = "agstack"
-version = "1.8.0"
+version = "1.8.1"
 source = { virtual = "." }
 dependencies = [
     { name = "aio-pika" },
@@ -53,7 +53,7 @@ requires-dist = [
     { name = "requests", specifier = ">=2.32.5" },
     { name = "restrictedpython", specifier = ">=7.0" },
     { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0.48" },
-    { name = "sqlobjects", specifier = ">=1.5.0" },
+    { name = "sqlobjects", specifier = ">=1.6.0" },
     { name = "tiktoken", specifier = ">=0.12.0" },
     { name = "uvicorn", specifier = ">=0.41.0" },
 ]
@@ -1736,14 +1736,14 @@ asyncio = [
 
 [[package]]
 name = "sqlobjects"
-version = "1.5.0"
+version = "1.6.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "sqlalchemy", extra = ["asyncio"] },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/1f/fd/fb2fbdfe4cb18a2215e9bcf940d6f48e130c78386a6a535a5eda29b40add/sqlobjects-1.5.0.tar.gz", hash = "sha256:b456a7a8b7fb9aab6bafdd341e9458ab46f1817819b5c92131b7372774d1e30d", size = 166312, upload-time = "2026-03-16T05:54:52.532Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/47/8f/6890987a2c298bdcf8d1b9d97fc626ee62c0c9cd657657fac20845e2fb07/sqlobjects-1.6.0.tar.gz", hash = "sha256:1f14c408cc22905ebfa7cb67316bf7b6560d122e648858710f02c3120ee4fcd8", size = 166917, upload-time = "2026-03-18T01:27:39.614Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/5d/60/a8cd5ae69187b8373428e0cc99279f0070f134b420ae9ea9d63d40c3ac33/sqlobjects-1.5.0-py3-none-any.whl", hash = "sha256:0c29b7257e9371aa2db583a214bac84c2e6a924b0aafeaeb221662eab32f3aad", size = 187313, upload-time = "2026-03-16T05:54:51.079Z" },
+    { url = "https://files.pythonhosted.org/packages/dd/72/1bd93ce8b0adf6073bb770e8c276cb18661c4f2d7ead52cdee857f755177/sqlobjects-1.6.0-py3-none-any.whl", hash = "sha256:c98213737e2d4859334fea1f1149a8b3206060f91faeb9e56e5646f9d12a81c8", size = 187844, upload-time = "2026-03-18T01:27:38.309Z" },
 ]
 
 [[package]]

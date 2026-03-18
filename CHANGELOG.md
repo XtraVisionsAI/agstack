@@ -1,3 +1,9 @@
+## 1.8.1 (2026-03-18)
+
+### Fix
+
+- **events**: log exceptions from event handlers instead of silently swallowing them
+
 ## 1.8.0 (2026-03-16)
 
 ### Feat
