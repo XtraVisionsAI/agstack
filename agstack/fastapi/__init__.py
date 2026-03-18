@@ -15,6 +15,9 @@ def setup_fastapi(title: str, version: str, debug: bool, static_url: str) -> Fas
         version=version,
         license_info={"name": "END USER LICENSE AGREEMENT"},
         debug=debug,
+        docs_url="/docs" if debug else None,
+        redoc_url="/redoc" if debug else None,
+        openapi_url="/openapi.json" if debug else None,
     )
 
     # CORS 中间件（仅开发环境）
