@@ -1,3 +1,9 @@
+## 1.8.2 (2026-03-18)
+
+### Fix
+
+- **fastapi**: disable docs, redoc, and openapi.json endpoints in non-debug mode
+
 ## 1.8.1 (2026-03-18)
 
 ### Fix
