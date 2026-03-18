@@ -3,10 +3,14 @@
 """全局事件总线系统"""
 
 import asyncio
+import logging
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from typing import Any, Callable
+
+
+logger = logging.getLogger(__name__)
 
 
 class EventType(str, Enum):
@@ -79,7 +83,15 @@ class EventBus:
                 tasks.append(asyncio.create_task(asyncio.to_thread(handler, event)))
 
         if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            for handler, result in zip(handlers, results, strict=True):
+                if isinstance(result, BaseException):
+                    logger.exception(
+                        "Event handler %r failed for event %r",
+                        handler,
+                        event_type,
+                        exc_info=result,
+                    )
 
     def get_handlers(self, event_type: EventType) -> list[Callable]:
         """获取事件处理器"""
