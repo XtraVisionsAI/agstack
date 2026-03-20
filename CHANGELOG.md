@@ -1,3 +1,9 @@
+## 1.8.3 (2026-03-20)
+
+### Fix
+
+- replace passlib with bcrypt to fix __about__ attribute error
+
 ## 1.8.2 (2026-03-18)
 
 ### Fix
