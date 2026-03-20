@@ -7,12 +7,11 @@ import json
 import time
 from datetime import datetime, timedelta
 
+import bcrypt
 from jwcrypto import jwk, jws
-from passlib.context import CryptContext
 
 
-# bcrypt 上下文配置：12 轮加密，提供良好的安全性和性能平衡
-__context = CryptContext(schemes=["bcrypt"], deprecated="auto", bcrypt__rounds=12)
+_BCRYPT_ROUNDS = 12
 
 __all__ = [
     "create_jwt_token_with_key",
@@ -100,9 +99,7 @@ def hash_password_with_key(passwd: str, secret_key: str) -> str:
     :return: bcrypt 哈希字符串
     """
     passwd = _get_hmac_str(passwd, secret_key)
-    hashed = __context.hash(passwd)
-
-    return hashed
+    return bcrypt.hashpw(passwd.encode(), bcrypt.gensalt(rounds=_BCRYPT_ROUNDS)).decode()
 
 
 def verify_password_with_key(passwd: str, hashed_pwd: str, secret_key: str) -> bool:
@@ -116,7 +113,7 @@ def verify_password_with_key(passwd: str, hashed_pwd: str, secret_key: str) -> b
     :return: 密码正确返回 True，否则返回 False
     """
     passwd = _get_hmac_str(passwd, secret_key)
-    return __context.verify(passwd, hashed_pwd)
+    return bcrypt.checkpw(passwd.encode(), hashed_pwd.encode())
 
 
 def _get_hmac_str(plaintext: str, secret_key: str) -> str:
