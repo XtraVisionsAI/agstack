@@ -1,3 +1,9 @@
+## 1.8.4 (2026-03-26)
+
+### Fix
+
+- **flow**: tool node now raises on failure instead of returning None
+
 ## 1.8.3 (2026-03-20)
 
 ### Fix
