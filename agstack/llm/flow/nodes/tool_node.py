@@ -4,7 +4,7 @@
 
 from typing import TYPE_CHECKING, Any
 
-from ..exceptions import FlowError
+from ..exceptions import FlowError, ToolExecutionError
 from ..registry import registry
 from .base import NodeHandler
 
@@ -31,4 +31,7 @@ class ToolNodeHandler(NodeHandler):
         config = node.get("config", {})
         resolved = self.resolve_inputs(config, context)
         tool = self._create_tool(config)
-        return await tool.run(context, inputs=resolved)
+        result = await tool.execute_async(context, inputs=resolved)
+        if not result.success:
+            raise ToolExecutionError("TOOL_EXECUTION_FAILED", args={"tool_name": tool.name, "error": result.error})
+        return result.result

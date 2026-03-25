@@ -2,12 +2,15 @@
 
 """工具定义和执行"""
 
+import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Callable
 
 
 if TYPE_CHECKING:
     from .context import FlowContext
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -52,6 +55,7 @@ class Tool:
 
             return ToolResult(name=self.name, arguments=inputs or {}, result=result, success=True)
         except Exception as e:
+            logger.warning("Tool %s failed: %s", self.name, e, exc_info=True)
             return ToolResult(
                 name=self.name,
                 arguments=inputs or {},
