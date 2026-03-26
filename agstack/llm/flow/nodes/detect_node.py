@@ -47,10 +47,11 @@ class DetectNodeHandler(NodeHandler):
         resolved_inputs = self.resolve_inputs(config, context)
 
         query = resolved_inputs.get("query", "")
-        instruction = config.get("instruction", "Classify the input")
-        options = config.get("options", [])
-        model = config.get("model", "gpt-4o-mini")
-        temperature = config.get("temperature", 0.0)
+        instruction = resolved_inputs.get("instruction") or config.get("instruction", "Classify the input")
+        options = resolved_inputs.get("options") or config.get("options", [])
+        model = resolved_inputs.get("model") or config.get("model", "gpt-4o-mini")
+        _raw_temp = resolved_inputs.get("temperature")
+        temperature: float = float(_raw_temp) if _raw_temp is not None else float(config.get("temperature", 0.0))
 
         messages = self._build_classification_prompt(instruction, options, query)
 

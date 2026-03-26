@@ -257,6 +257,76 @@ class TestDetectNodeHandler:
         assert isinstance(result, dict)
         assert result == {"choice": "qa"}
 
+    @patch("agstack.llm.flow.nodes.detect_node.get_llm_client")
+    def test_dynamic_instruction_and_options(self, mock_get_client):
+        from agstack.llm.flow.nodes.detect_node import DetectNodeHandler
+
+        mock_response = MagicMock()
+        mock_choice = MagicMock()
+        mock_choice.message.content = '{"result": "billing"}'
+        mock_response.choices = [mock_choice]
+        mock_response.usage = MagicMock(prompt_tokens=10, completion_tokens=5, total_tokens=15)
+
+        mock_client = AsyncMock()
+        mock_client.chat = AsyncMock(return_value=mock_response)
+        mock_get_client.return_value = mock_client
+
+        handler = DetectNodeHandler()
+        ctx = FlowContext(
+            variables={
+                "my_instruction": "classify ticket type",
+                "my_options": ["billing", "technical", "general"],
+            }
+        )
+        node = {
+            "id": "detect1",
+            "type": "detect",
+            "config": {
+                "inputs": {
+                    "query": "$v.user_query",
+                    "instruction": "$v.my_instruction",
+                    "options": "$v.my_options",
+                },
+            },
+        }
+        ctx.variables["user_query"] = "I was charged twice"
+        result = asyncio.get_event_loop().run_until_complete(handler.execute(node, ctx))
+        assert result == {"choice": "billing"}
+
+    @patch("agstack.llm.flow.nodes.detect_node.get_llm_client")
+    def test_dynamic_model_and_temperature(self, mock_get_client):
+        from agstack.llm.flow.nodes.detect_node import DetectNodeHandler
+
+        mock_response = MagicMock()
+        mock_choice = MagicMock()
+        mock_choice.message.content = '{"result": "qa"}'
+        mock_response.choices = [mock_choice]
+        mock_response.usage = MagicMock(prompt_tokens=10, completion_tokens=5, total_tokens=15)
+
+        mock_client = AsyncMock()
+        mock_client.chat = AsyncMock(return_value=mock_response)
+        mock_get_client.return_value = mock_client
+
+        handler = DetectNodeHandler()
+        ctx = FlowContext(variables={"chosen_model": "qwen2.5-72b", "temp": 0.1})
+        node = {
+            "id": "detect2",
+            "type": "detect",
+            "config": {
+                "options": ["qa", "chitchat"],
+                "inputs": {
+                    "query": "hello",
+                    "model": "$v.chosen_model",
+                    "temperature": "$v.temp",
+                },
+            },
+        }
+        result = asyncio.get_event_loop().run_until_complete(handler.execute(node, ctx))
+        call_args = mock_client.chat.call_args
+        assert call_args.kwargs["model"] == "qwen2.5-72b"
+        assert call_args.kwargs["temperature"] == 0.1
+        assert result == {"choice": "qa"}
+
 
 # ── LLMChatNodeHandler ──
 
