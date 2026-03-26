@@ -414,6 +414,47 @@ class TestLLMChatNodeHandler:
         assert len(system_msg) == 1
         assert system_msg[0]["content"] == "You speak Chinese"
 
+    @patch("agstack.llm.flow.nodes.llm_chat_node.get_llm_client")
+    def test_dynamic_model_temperature_max_tokens(self, mock_get_client):
+        from agstack.llm.flow.nodes.llm_chat_node import LLMChatNodeHandler
+
+        mock_response = MagicMock()
+        mock_choice = MagicMock()
+        mock_choice.message.content = "response"
+        mock_response.choices = [mock_choice]
+        mock_response.usage = MagicMock(prompt_tokens=5, completion_tokens=3, total_tokens=8)
+
+        mock_client = AsyncMock()
+        mock_client.chat = AsyncMock(return_value=mock_response)
+        mock_get_client.return_value = mock_client
+
+        handler = LLMChatNodeHandler()
+        ctx = FlowContext(
+            variables={
+                "chosen_model": "qwen2.5-72b",
+                "temp": 0.2,
+                "max_tok": 512,
+            }
+        )
+        node = {
+            "id": "chat1",
+            "type": "llm_chat",
+            "config": {
+                "prompt": "Hello",
+                "model": "gpt-4o",
+                "inputs": {
+                    "model": "$v.chosen_model",
+                    "temperature": "$v.temp",
+                    "max_tokens": "$v.max_tok",
+                },
+            },
+        }
+        asyncio.get_event_loop().run_until_complete(handler.execute(node, ctx))
+        call_args = mock_client.chat.call_args
+        assert call_args.kwargs["model"] == "qwen2.5-72b"
+        assert call_args.kwargs["temperature"] == 0.2
+        assert call_args.kwargs["max_tokens"] == 512
+
 
 # ── Flow routing ──
 
