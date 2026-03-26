@@ -50,7 +50,8 @@ class LLMChatNodeHandler(NodeHandler):
         model = resolved_inputs.get("model") or config.get("model", "gpt-4o")
         _temp = resolved_inputs.get("temperature")
         temperature: float = float(_temp) if _temp is not None else float(config.get("temperature", 0.7))
-        max_tokens = resolved_inputs.get("max_tokens") or config.get("max_tokens")
+        _max = resolved_inputs.get("max_tokens")
+        max_tokens = _max if _max is not None else config.get("max_tokens")
 
         client = get_llm_client()
         messages: list[ChatCompletionMessageParam] = [{"role": "user", "content": prompt_text}]
@@ -107,7 +108,8 @@ class LLMChatNodeHandler(NodeHandler):
         model = resolved_inputs.get("model") or config.get("model", "gpt-4o")
         _temp = resolved_inputs.get("temperature")
         temperature: float = float(_temp) if _temp is not None else float(config.get("temperature", 0.7))
-        max_tokens = resolved_inputs.get("max_tokens") or config.get("max_tokens")
+        _max = resolved_inputs.get("max_tokens")
+        max_tokens = _max if _max is not None else config.get("max_tokens")
 
         client = get_llm_client()
         messages: list[ChatCompletionMessageParam] = [{"role": "user", "content": prompt_text}]
