@@ -30,8 +30,9 @@ class LLMRerankNodeHandler(NodeHandler):
         if isinstance(documents, str):
             documents = [documents]
 
-        model = config.get("model", "bge-reranker-v2-m3")
-        top_n = config.get("top_n", 10)
+        model = resolved_inputs.get("model") or config.get("model", "bge-reranker-v2-m3")
+        _top_n = resolved_inputs.get("top_n")
+        top_n = _top_n if _top_n is not None else config.get("top_n", 10)
 
         client = get_llm_client()
         raw_results = await client.rerank(

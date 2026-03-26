@@ -544,3 +544,65 @@ class TestDataFlowIntegration:
         }
         result = asyncio.get_event_loop().run_until_complete(handler.execute(node, ctx))
         assert result == {"result": 30}
+
+
+class TestLLMRerankNodeHandler:
+    """LLM Rerank 节点动态参数测试"""
+
+    @patch("agstack.llm.flow.nodes.llm_rerank_node.get_llm_client")
+    def test_dynamic_model_and_top_n(self, mock_get_client):
+        from agstack.llm.flow.nodes.llm_rerank_node import LLMRerankNodeHandler
+
+        mock_client = AsyncMock()
+        mock_client.rerank = AsyncMock(return_value=[(0, 0.95, "doc A"), (1, 0.80, "doc B")])
+        mock_get_client.return_value = mock_client
+
+        handler = LLMRerankNodeHandler()
+        ctx = FlowContext(variables={"rerank_model": "bge-reranker-large", "topk": 2})
+        node = {
+            "id": "rerank1",
+            "type": "llm_rerank",
+            "config": {
+                "model": "bge-reranker-v2-m3",
+                "inputs": {
+                    "query": "best python book",
+                    "documents": ["doc A", "doc B", "doc C"],
+                    "model": "$v.rerank_model",
+                    "top_n": "$v.topk",
+                },
+            },
+        }
+        result = asyncio.get_event_loop().run_until_complete(handler.execute(node, ctx))
+        call_args = mock_client.rerank.call_args
+        assert call_args.kwargs["model"] == "bge-reranker-large"
+        assert call_args.kwargs["top_n"] == 2
+        assert result == {
+            "results": [{"index": 0, "score": 0.95, "text": "doc A"}, {"index": 1, "score": 0.80, "text": "doc B"}]
+        }
+
+    @patch("agstack.llm.flow.nodes.llm_rerank_node.get_llm_client")
+    def test_static_fallback_still_works(self, mock_get_client):
+        from agstack.llm.flow.nodes.llm_rerank_node import LLMRerankNodeHandler
+
+        mock_client = AsyncMock()
+        mock_client.rerank = AsyncMock(return_value=[(0, 0.9, "doc A")])
+        mock_get_client.return_value = mock_client
+
+        handler = LLMRerankNodeHandler()
+        ctx = FlowContext()
+        node = {
+            "id": "rerank2",
+            "type": "llm_rerank",
+            "config": {
+                "model": "bge-reranker-v2-m3",
+                "top_n": 5,
+                "inputs": {
+                    "query": "test",
+                    "documents": ["doc A"],
+                },
+            },
+        }
+        asyncio.get_event_loop().run_until_complete(handler.execute(node, ctx))
+        call_args = mock_client.rerank.call_args
+        assert call_args.kwargs["model"] == "bge-reranker-v2-m3"
+        assert call_args.kwargs["top_n"] == 5
