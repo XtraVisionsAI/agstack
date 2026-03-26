@@ -606,3 +606,55 @@ class TestLLMRerankNodeHandler:
         call_args = mock_client.rerank.call_args
         assert call_args.kwargs["model"] == "bge-reranker-v2-m3"
         assert call_args.kwargs["top_n"] == 5
+
+
+class TestLLMEmbedNodeHandler:
+    """LLM Embed 节点动态参数测试"""
+
+    @patch("agstack.llm.flow.nodes.llm_embed_node.get_llm_client")
+    def test_dynamic_model(self, mock_get_client):
+        from agstack.llm.flow.nodes.llm_embed_node import LLMEmbedNodeHandler
+
+        mock_client = AsyncMock()
+        mock_client.embed = AsyncMock(return_value=[[0.1, 0.2, 0.3]])
+        mock_get_client.return_value = mock_client
+
+        handler = LLMEmbedNodeHandler()
+        ctx = FlowContext(variables={"embed_model": "text-embedding-3-large"})
+        node = {
+            "id": "embed1",
+            "type": "llm_embed",
+            "config": {
+                "model": "bge-m3",
+                "inputs": {
+                    "texts": ["hello world"],
+                    "model": "$v.embed_model",
+                },
+            },
+        }
+        result = asyncio.get_event_loop().run_until_complete(handler.execute(node, ctx))
+        call_args = mock_client.embed.call_args
+        assert call_args.kwargs["model"] == "text-embedding-3-large"
+        assert result == {"embeddings": [[0.1, 0.2, 0.3]]}
+
+    @patch("agstack.llm.flow.nodes.llm_embed_node.get_llm_client")
+    def test_static_model_fallback(self, mock_get_client):
+        from agstack.llm.flow.nodes.llm_embed_node import LLMEmbedNodeHandler
+
+        mock_client = AsyncMock()
+        mock_client.embed = AsyncMock(return_value=[[0.1, 0.2]])
+        mock_get_client.return_value = mock_client
+
+        handler = LLMEmbedNodeHandler()
+        ctx = FlowContext()
+        node = {
+            "id": "embed2",
+            "type": "llm_embed",
+            "config": {
+                "model": "bge-m3",
+                "inputs": {"texts": ["hello"]},
+            },
+        }
+        asyncio.get_event_loop().run_until_complete(handler.execute(node, ctx))
+        call_args = mock_client.embed.call_args
+        assert call_args.kwargs["model"] == "bge-m3"

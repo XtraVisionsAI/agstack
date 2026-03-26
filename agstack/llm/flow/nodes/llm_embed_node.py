@@ -29,7 +29,7 @@ class LLMEmbedNodeHandler(NodeHandler):
         if isinstance(texts, str):
             texts = [texts]
 
-        model = config.get("model", "bge-m3")
+        model = resolved_inputs.get("model") or config.get("model", "bge-m3")
 
         client = get_llm_client()
         embeddings = await client.embed(texts=texts, model=model)
