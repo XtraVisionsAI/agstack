@@ -48,7 +48,8 @@ class DetectNodeHandler(NodeHandler):
 
         query = resolved_inputs.get("query", "")
         instruction = resolved_inputs.get("instruction") or config.get("instruction", "Classify the input")
-        options = resolved_inputs.get("options") or config.get("options", [])
+        _options = resolved_inputs.get("options")
+        options = _options if _options is not None else config.get("options", [])
         model = resolved_inputs.get("model") or config.get("model", "gpt-4o-mini")
         _raw_temp = resolved_inputs.get("temperature")
         temperature: float = float(_raw_temp) if _raw_temp is not None else float(config.get("temperature", 0.0))
