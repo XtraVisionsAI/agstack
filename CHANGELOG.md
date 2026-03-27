@@ -1,3 +1,18 @@
+## 1.9.0 (2026-03-27)
+
+### Feat
+
+- **flow**: llm_embed_node supports dynamic model via inputs
+- **flow**: llm_rerank_node supports dynamic model/top_n via inputs
+- **flow**: llm_chat_node supports dynamic model/temperature/max_tokens via inputs
+- **flow**: detect_node supports dynamic instruction/options/model/temperature via inputs
+
+### Fix
+
+- **chore**: update sqlobjects to 1.9.0
+- **flow**: llm_chat_node max_tokens fallback uses is not None
+- **flow**: detect_node options fallback uses is not None to handle empty list
+
 ## 1.8.4 (2026-03-26)
 
 ### Fix
