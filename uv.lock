@@ -21,7 +21,6 @@ dependencies = [
     { name = "python-multipart" },
     { name = "requests" },
     { name = "restrictedpython" },
-    { name = "sqlalchemy", extra = ["asyncio"] },
     { name = "sqlobjects" },
     { name = "tiktoken" },
     { name = "uvicorn" },
@@ -52,8 +51,7 @@ requires-dist = [
     { name = "python-multipart", specifier = ">=0.0.20" },
     { name = "requests", specifier = ">=2.32.5" },
     { name = "restrictedpython", specifier = ">=7.0" },
-    { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0.48" },
-    { name = "sqlobjects", specifier = ">=1.6.0" },
+    { name = "sqlobjects", specifier = ">=1.9.0" },
     { name = "tiktoken", specifier = ">=0.12.0" },
     { name = "uvicorn", specifier = ">=0.41.0" },
 ]
@@ -1722,14 +1720,14 @@ asyncio = [
 
 [[package]]
 name = "sqlobjects"
-version = "1.6.0"
+version = "1.9.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "sqlalchemy", extra = ["asyncio"] },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/47/8f/6890987a2c298bdcf8d1b9d97fc626ee62c0c9cd657657fac20845e2fb07/sqlobjects-1.6.0.tar.gz", hash = "sha256:1f14c408cc22905ebfa7cb67316bf7b6560d122e648858710f02c3120ee4fcd8", size = 166917, upload-time = "2026-03-18T01:27:39.614Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/a7/2f/5a82a559dc44be386a58cb2c8b60e1543f9f7ae490039efa63fca2fbf805/sqlobjects-1.9.0.tar.gz", hash = "sha256:371f10528ca912e4d06c92ba9b41e5901f5aa69f7006452eb1f76c0ca0040f75", size = 170455, upload-time = "2026-03-27T00:01:42.507Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/dd/72/1bd93ce8b0adf6073bb770e8c276cb18661c4f2d7ead52cdee857f755177/sqlobjects-1.6.0-py3-none-any.whl", hash = "sha256:c98213737e2d4859334fea1f1149a8b3206060f91faeb9e56e5646f9d12a81c8", size = 187844, upload-time = "2026-03-18T01:27:38.309Z" },
+    { url = "https://files.pythonhosted.org/packages/e7/05/a4f39a698be045b8918bf63f638fcd1bf047106566c7d090a4f8c66ae91e/sqlobjects-1.9.0-py3-none-any.whl", hash = "sha256:10036f227c6973715230e08a5e3e6bc03d5bdf9c37c9090741f4040709be7b79", size = 191256, upload-time = "2026-03-27T00:01:41.112Z" },
 ]
 
 [[package]]
