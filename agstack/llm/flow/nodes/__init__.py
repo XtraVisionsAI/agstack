@@ -9,6 +9,8 @@ from .llm_chat_node import LLMChatNodeHandler
 from .llm_embed_node import LLMEmbedNodeHandler
 from .llm_rerank_node import LLMRerankNodeHandler
 from .python_node import PythonNodeHandler
+from .subflow_node import SubflowNodeHandler
+from .switch_node import SwitchNodeHandler
 from .tool_node import ToolNodeHandler
 
 
@@ -21,6 +23,8 @@ builtin_handlers: list[NodeHandler] = [
     LLMEmbedNodeHandler(),
     LLMRerankNodeHandler(),
     DetectNodeHandler(),
+    SwitchNodeHandler(),
+    SubflowNodeHandler(),
 ]
 
 __all__ = [
