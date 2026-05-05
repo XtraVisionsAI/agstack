@@ -1,3 +1,9 @@
+## 1.10.2 (2026-05-05)
+
+### Fix
+
+- **flow**: use single namespace in python node sandbox so imports are visible to main()
+
 ## 1.10.1 (2026-05-05)
 
 ### Fix
