@@ -1,3 +1,9 @@
+## 1.10.0 (2026-05-05)
+
+### Feat
+
+- **flow**: add switch and subflow node types
+
 ## 1.9.0 (2026-03-27)
 
 ### Feat
