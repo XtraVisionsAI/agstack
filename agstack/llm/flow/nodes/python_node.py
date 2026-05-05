@@ -72,6 +72,16 @@ def execute_python_node(code: str, inputs: dict[str, Any]) -> dict[str, Any]:
         **utility_builtins,
         "list": list,
         "dict": dict,
+        "type": type,
+        "any": any,
+        "all": all,
+        "min": min,
+        "max": max,
+        "sum": sum,
+        "enumerate": enumerate,
+        "map": map,
+        "filter": filter,
+        "print": print,
         "__import__": _safe_import,
     }
 
