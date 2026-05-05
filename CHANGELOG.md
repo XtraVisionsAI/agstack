@@ -1,3 +1,9 @@
+## 1.10.1 (2026-05-05)
+
+### Fix
+
+- **flow**: expose common Python builtins in sandbox environment
+
 ## 1.10.0 (2026-05-05)
 
 ### Feat
