@@ -85,10 +85,9 @@ def execute_python_node(code: str, inputs: dict[str, Any]) -> dict[str, Any]:
         "__import__": _safe_import,
     }
 
-    loc: dict[str, Any] = {}
-    exec(byte_code, glb, loc)  # noqa: S102
+    exec(byte_code, glb)  # noqa: S102
 
-    main_fn = loc.get("main")
+    main_fn = glb.get("main")
     if not callable(main_fn):
         raise ValueError("Python node code must define a callable 'main' function")
 
