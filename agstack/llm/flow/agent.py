@@ -30,7 +30,9 @@ class Agent:
         temperature: float = 0.7,
         max_tokens: int | None = None,
         max_turns: int = 10,
-        display_name: str | None = None,
+        *,
+        label: str | None = None,
+        echo: bool = False,
     ):
         """初始化 Agent
 
@@ -41,7 +43,8 @@ class Agent:
         :param temperature: 温度参数
         :param max_tokens: 最大 token 数
         :param max_turns: 最大轮次
-        :param display_name: 面向用户的展示名称（用于前端脱敏展示）
+        :param label: 面向用户的展示名称（控制 STEP 进度事件可见性）
+        :param echo: 是否转发 TEXT_MESSAGE 给用户
         """
         self.name = name
         self.instructions = instructions or f"You are {name}, a helpful AI assistant."
@@ -50,7 +53,8 @@ class Agent:
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.max_turns = max_turns
-        self.display_name = display_name
+        self.label = label
+        self.echo = echo
 
     def get_system_message(self) -> dict[str, Any]:
         """获取系统消息"""

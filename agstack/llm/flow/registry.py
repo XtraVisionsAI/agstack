@@ -19,8 +19,10 @@ class FlowRegistry:
         self._flows: dict[str, Any] = {}
         self._node_handlers: dict[str, Any] = {}
         self._builtins_loaded = False
-        self._tool_display_names: dict[str, str] = {}
-        self._agent_display_names: dict[str, str] = {}
+        self._tool_labels: dict[str, str] = {}
+        self._tool_echo: dict[str, bool] = {}
+        self._agent_labels: dict[str, str] = {}
+        self._agent_echo: dict[str, bool] = {}
 
     def _ensure_builtins(self) -> None:
         """延迟加载内置 node handlers（避免循环导入）"""
@@ -34,17 +36,23 @@ class FlowRegistry:
 
     # ── 注册 ──
 
-    def register_tool(self, name: str, tool_class, display_name: str | None = None) -> None:
+    def register_tool(self, name: str, tool_class, *, label: str | None = None, echo: bool = False) -> None:
         """注册工具工厂/类/实例"""
         self._tools[name] = tool_class
-        if display_name is not None:
-            self._tool_display_names[name] = display_name
+        if label is not None:
+            self._tool_labels[name] = label
+        if echo:
+            self._tool_echo[name] = True
 
-    def register_agent(self, name: str, agent_class: type[Agent], display_name: str | None = None) -> None:
+    def register_agent(
+        self, name: str, agent_class: type[Agent], *, label: str | None = None, echo: bool = False
+    ) -> None:
         """注册 Agent 类型"""
         self._agents[name] = agent_class
-        if display_name is not None:
-            self._agent_display_names[name] = display_name
+        if label is not None:
+            self._agent_labels[name] = label
+        if echo:
+            self._agent_echo[name] = True
 
     def register_flow(self, name: str, flow_class: type) -> None:
         """注册 Flow 类型"""
@@ -93,23 +101,21 @@ class FlowRegistry:
 
     # ── 查询 ──
 
-    def get_tool_display_name(self, name: str) -> str | None:
-        """获取工具的展示名称（用于前端脱敏展示）"""
-        if name in self._tool_display_names:
-            return self._tool_display_names[name]
-        component = self._tools.get(name)
-        if component and hasattr(component, "display_name"):
-            return component.display_name
-        return None
+    def get_tool_label(self, name: str) -> str | None:
+        """获取工具的展示名称"""
+        return self._tool_labels.get(name)
 
-    def get_agent_display_name(self, name: str) -> str | None:
-        """获取 Agent 的展示名称（用于前端脱敏展示）"""
-        if name in self._agent_display_names:
-            return self._agent_display_names[name]
-        component = self._agents.get(name)
-        if component and hasattr(component, "display_name"):
-            return getattr(component, "display_name", None)
-        return None
+    def get_tool_echo(self, name: str) -> bool:
+        """获取工具是否转发 TEXT_MESSAGE（label 隐含 echo）"""
+        return name in self._tool_labels or self._tool_echo.get(name, False)
+
+    def get_agent_label(self, name: str) -> str | None:
+        """获取 Agent 的展示名称"""
+        return self._agent_labels.get(name)
+
+    def get_agent_echo(self, name: str) -> bool:
+        """获取 Agent 是否转发 TEXT_MESSAGE（label 隐含 echo）"""
+        return name in self._agent_labels or self._agent_echo.get(name, False)
 
     def get_tool_class(self, name: str) -> Any | None:
         """获取工具工厂/类"""
