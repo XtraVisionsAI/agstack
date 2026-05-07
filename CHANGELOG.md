@@ -1,3 +1,9 @@
+## 1.11.0 (2026-05-07)
+
+### Feat
+
+- **flow**: add display_name support to Tool, Agent, and FlowRegistry
+
 ## 1.10.2 (2026-05-05)
 
 ### Fix
