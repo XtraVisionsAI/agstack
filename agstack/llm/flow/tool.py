@@ -33,6 +33,7 @@ class Tool:
         description: str,
         function: Callable,
         parameters: dict[str, Any] | None = None,
+        display_name: str | None = None,
     ):
         """初始化工具
 
@@ -40,11 +41,13 @@ class Tool:
         :param description: 工具描述
         :param function: 工具函数，签名 fn(context, inputs) -> dict[str, Any]
         :param parameters: JSON Schema 参数定义（用于 LLM 调用）
+        :param display_name: 面向用户的展示名称（用于前端脱敏展示）
         """
         self.name = name
         self.description = description
         self.function = function
         self.parameters = parameters or {"type": "object", "properties": {}, "required": []}
+        self.display_name = display_name
 
     async def execute_async(self, context: "FlowContext", inputs: dict[str, Any] | None = None) -> ToolResult:
         """异步执行工具"""

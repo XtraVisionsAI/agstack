@@ -19,6 +19,8 @@ class FlowRegistry:
         self._flows: dict[str, Any] = {}
         self._node_handlers: dict[str, Any] = {}
         self._builtins_loaded = False
+        self._tool_display_names: dict[str, str] = {}
+        self._agent_display_names: dict[str, str] = {}
 
     def _ensure_builtins(self) -> None:
         """延迟加载内置 node handlers（避免循环导入）"""
@@ -32,13 +34,17 @@ class FlowRegistry:
 
     # ── 注册 ──
 
-    def register_tool(self, name: str, tool_class) -> None:
+    def register_tool(self, name: str, tool_class, display_name: str | None = None) -> None:
         """注册工具工厂/类/实例"""
         self._tools[name] = tool_class
+        if display_name is not None:
+            self._tool_display_names[name] = display_name
 
-    def register_agent(self, name: str, agent_class: type[Agent]) -> None:
+    def register_agent(self, name: str, agent_class: type[Agent], display_name: str | None = None) -> None:
         """注册 Agent 类型"""
         self._agents[name] = agent_class
+        if display_name is not None:
+            self._agent_display_names[name] = display_name
 
     def register_flow(self, name: str, flow_class: type) -> None:
         """注册 Flow 类型"""
@@ -86,6 +92,24 @@ class FlowRegistry:
         return [tool for name in names if (tool := self.create_tool(name))]
 
     # ── 查询 ──
+
+    def get_tool_display_name(self, name: str) -> str | None:
+        """获取工具的展示名称（用于前端脱敏展示）"""
+        if name in self._tool_display_names:
+            return self._tool_display_names[name]
+        component = self._tools.get(name)
+        if component and hasattr(component, "display_name"):
+            return component.display_name
+        return None
+
+    def get_agent_display_name(self, name: str) -> str | None:
+        """获取 Agent 的展示名称（用于前端脱敏展示）"""
+        if name in self._agent_display_names:
+            return self._agent_display_names[name]
+        component = self._agents.get(name)
+        if component and hasattr(component, "display_name"):
+            return getattr(component, "display_name", None)
+        return None
 
     def get_tool_class(self, name: str) -> Any | None:
         """获取工具工厂/类"""
