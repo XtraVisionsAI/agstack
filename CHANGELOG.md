@@ -1,3 +1,9 @@
+## 1.12.0 (2026-05-07)
+
+### Feat
+
+- **flow**: replace display_name with label/echo for AG-UI event visibility control
+
 ## 1.11.0 (2026-05-07)
 
 ### Feat
