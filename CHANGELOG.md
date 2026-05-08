@@ -1,3 +1,9 @@
+## 1.14.0 (2026-05-08)
+
+### Feat
+
+- **flow**: support agent parameter overrides from flow node config
+
 ## 1.13.0 (2026-05-08)
 
 ### Feat
