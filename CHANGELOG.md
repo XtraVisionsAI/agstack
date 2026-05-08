@@ -1,3 +1,9 @@
+## 1.13.0 (2026-05-08)
+
+### Feat
+
+- **flow**: add echo node handler for streaming text without LLM calls
+
 ## 1.12.0 (2026-05-07)
 
 ### Feat
