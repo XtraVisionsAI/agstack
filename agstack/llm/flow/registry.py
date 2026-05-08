@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import copy
 from typing import Any, cast
 
 from .agent import Agent
@@ -78,13 +79,19 @@ class FlowRegistry:
         return cast(Tool, component)
 
     def create_agent(self, name: str, **kwargs) -> Agent | None:
-        """创建 Agent 实例"""
+        """创建 Agent 实例
+
+        kwargs 中的参数会覆盖 agent 默认值（如 max_turns, model 等）。
+        """
         component = self._agents.get(name)
         if component is None:
             return None
         if callable(component):
             return cast(Agent, component(**kwargs))
-        return cast(Agent, component)
+        agent = cast(Agent, copy.copy(component))
+        for attr, value in kwargs.items():
+            setattr(agent, attr, value)
+        return agent
 
     def create_flow(self, name: str, **kwargs) -> Any | None:
         """创建 Flow 实例"""

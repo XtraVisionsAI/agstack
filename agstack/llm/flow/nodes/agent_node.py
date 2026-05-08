@@ -19,11 +19,14 @@ class AgentNodeHandler(NodeHandler):
 
     node_type = "agent"
 
+    _NODE_KEYS = frozenset({"agent_name", "inputs"})
+
     def _create_agent(self, config: dict):
         agent_name = config.get("agent_name")
         if not agent_name:
             raise FlowError("MISSING_AGENT_NAME", 400)
-        agent = registry.create_agent(agent_name)
+        agent_kwargs = {k: v for k, v in config.items() if k not in self._NODE_KEYS}
+        agent = registry.create_agent(agent_name, **agent_kwargs)
         if not agent:
             raise FlowError("AGENT_NOT_FOUND", 404, {"agent_name": agent_name})
         return agent
