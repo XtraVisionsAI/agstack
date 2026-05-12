@@ -1,3 +1,9 @@
+## 1.16.0 (2026-05-12)
+
+### Feat
+
+- **flow**: structured output, AG-UI visibility metadata, variable reference resolution
+
 ## 1.15.0 (2026-05-12)
 
 ### Feat
