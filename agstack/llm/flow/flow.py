@@ -16,6 +16,28 @@ if TYPE_CHECKING:
     from .nodes.base import NodeHandler
 
 
+_OPERATORS = (">=", "<=", "!=", "==", ">", "<")
+
+
+def _parse_literal(s: str) -> Any:
+    """解析字面量值"""
+    if s in ("true", "True"):
+        return True
+    if s in ("false", "False"):
+        return False
+    if s in ("none", "None", "null"):
+        return None
+    try:
+        return int(s)
+    except ValueError:
+        pass
+    try:
+        return float(s)
+    except ValueError:
+        pass
+    return s
+
+
 @dataclass
 class RetryPolicy:
     """节点重试策略"""
@@ -42,6 +64,7 @@ class Flow:
     nodes: list[dict[str, Any]] = field(default_factory=list)
     edges: list[dict[str, Any]] = field(default_factory=list)
     variables: dict[str, Any] = field(default_factory=dict)
+    cycle_limits: dict[str, int] = field(default_factory=dict)
 
     _node_handlers: dict[str, "NodeHandler"] = field(default_factory=dict, init=False, repr=False)
 
@@ -67,25 +90,46 @@ class Flow:
 
     # ── 边驱动路由 ──
 
-    def _resolve_next_node(self, current_id: str, result: str | None = None) -> str | None:
-        """根据当前节点和执行结果，通过 edges 查找下一节点"""
-        for edge in self.edges:
-            if edge.get("source") == current_id:
-                cond = edge.get("condition")
-                if cond is None or cond == result:
-                    return edge.get("target")
-        return None
+    def _eval_condition(self, condition: str, context: "FlowContext") -> bool:
+        """对边条件表达式求值"""
+        for op in _OPERATORS:
+            if op in condition:
+                left, right = condition.split(op, 1)
+                left_val = context.resolve_reference(left.strip())
+                right_val = _parse_literal(right.strip())
+                if op == "==":
+                    return left_val == right_val
+                if op == "!=":
+                    return left_val != right_val
+                try:
+                    if op == ">":
+                        return left_val > right_val
+                    if op == "<":
+                        return left_val < right_val
+                    if op == ">=":
+                        return left_val >= right_val
+                    if op == "<=":
+                        return left_val <= right_val
+                except TypeError:
+                    return False
+                break
+        return bool(context.resolve_reference(condition.strip()))
 
-    @staticmethod
-    def _extract_route_key(result: Any) -> str:
-        """从节点输出 dict 中提取路由键。
+    def _resolve_next_node(self, current_id: str, context: "FlowContext", force_fallback: bool = False) -> str | None:
+        """根据当前节点，通过 edges 表达式求值查找下一节点。
 
-        节点输出 dict 中若包含 ``choice`` 字段，即为路由键。
-        没有 ``choice`` 则默认 ``"done"``。
+        force_fallback=True 时跳过条件边，只走无条件边（用于循环超限逃逸）。
         """
-        if isinstance(result, dict):
-            return str(result.get("choice", "done"))
-        return "done"
+        fallback_target: str | None = None
+        for edge in self.edges:
+            if edge.get("source") != current_id:
+                continue
+            cond = edge.get("condition")
+            if cond is None:
+                fallback_target = edge.get("target")
+            elif not force_fallback and self._eval_condition(cond, context):
+                return edge.get("target")
+        return fallback_target
 
     # ── message 节点 ──
 
@@ -158,10 +202,16 @@ class Flow:
 
     # ── 执行入口 ──
 
+    def _check_cycle_limit(self, node_id: str, visit_count: dict[str, int]) -> bool:
+        """检查节点是否超出循环次数限制。返回 True 表示超限。"""
+        limit = self.cycle_limits.get(node_id)
+        if limit is not None and visit_count.get(node_id, 0) > limit:
+            return True
+        return False
+
     async def run(self, context: "FlowContext") -> dict[str, Any]:
         """执行 Flow"""
         if not self.edges:
-            # 向后兼容：无 edges 时按 nodes 列表顺序执行
             for node in self.nodes:
                 node_id = node.get("id")
                 if not node_id:
@@ -175,12 +225,21 @@ class Flow:
                 else:
                     raise NodeExecutionError("UNKNOWN_NODE_TYPE", args={"node_type": node_type})
         else:
-            # edge 驱动执行
             current_node_id: str | None = self.nodes[0]["id"] if self.nodes else None
+            visit_count: dict[str, int] = {}
+
             while current_node_id:
                 node = self.get_node_config(current_node_id)
                 if not node:
                     break
+
+                # 循环计数与超限检测
+                visit_count[current_node_id] = visit_count.get(current_node_id, 0) + 1
+                force_fallback = self._check_cycle_limit(current_node_id, visit_count)
+                if force_fallback:
+                    current_node_id = self._resolve_next_node(current_node_id, context, force_fallback=True)
+                    continue
+
                 context.current_node = current_node_id
                 node_type: str = node.get("type", "")
 
@@ -189,7 +248,7 @@ class Flow:
                     template = config.get("content", "")
                     text = template.format_map(_SafeFormatDict(context.variables))
                     context.set_output(current_node_id, {"result": text})
-                    current_node_id = self._resolve_next_node(current_node_id, "done")
+                    current_node_id = self._resolve_next_node(current_node_id, context)
 
                 elif node_type == "parallel":
                     config = node.get("config", {})
@@ -207,8 +266,13 @@ class Flow:
                             context.set_output(branch_id, result)
 
                     await asyncio.gather(*[_run_branch(bid) for bid in branches])
-                    context.set_output(current_node_id, {"choice": "done"})
-                    current_node_id = self._resolve_next_node(current_node_id, "done")
+                    merged: dict[str, Any] = {}
+                    for bid in branches:
+                        branch_result = context.outputs.get(bid, {})
+                        if isinstance(branch_result, dict):
+                            merged.update(branch_result)
+                    context.set_output(current_node_id, merged)
+                    current_node_id = self._resolve_next_node(current_node_id, context)
 
                 elif node_type == "iteration":
                     config = node.get("config", {})
@@ -238,44 +302,13 @@ class Flow:
                             results.append(context.outputs.get(body_nodes[-1]))
 
                     context.set_output(current_node_id, {"results": results})
-                    current_node_id = self._resolve_next_node(current_node_id, "done")
-
-                elif node_type == "loop":
-                    config = node.get("config", {})
-                    body_nodes_l: list[str] = config.get("body", [])
-                    condition_node_id = config.get("condition_node")
-                    break_cond = config.get("break_condition", "done")
-                    max_iter = config.get("max_iterations", 10)
-                    loop_var = config.get("loop_variable", "loop_count")
-
-                    for iteration in range(max_iter):
-                        context.set_variable(loop_var, iteration)
-                        for body_node_id in body_nodes_l:
-                            body_node = self.get_node_config(body_node_id)
-                            if not body_node:
-                                continue
-                            body_type: str = body_node.get("type", "")
-                            body_handler = self._node_handlers.get(body_type)
-                            if body_handler:
-                                body_result = await body_handler.execute(body_node, context)
-                                context.set_output(body_node_id, body_result)
-                        if condition_node_id:
-                            cond_result = context.outputs.get(condition_node_id, {})
-                            if isinstance(cond_result, dict) and cond_result.get("choice") == break_cond:
-                                break
-
-                    context.set_output(current_node_id, {"choice": "done"})
-                    current_node_id = self._resolve_next_node(current_node_id, "done")
+                    current_node_id = self._resolve_next_node(current_node_id, context)
 
                 elif node_type in self._node_handlers:
-                    # 所有执行类节点统一分发
                     handler = self._node_handlers[node_type]
                     result = await handler.execute(node, context)
                     context.set_output(current_node_id, result)
-                    route_key = self._extract_route_key(result)
-                    current_node_id = self._resolve_next_node(current_node_id, route_key) or self._resolve_next_node(
-                        current_node_id, "done"
-                    )
+                    current_node_id = self._resolve_next_node(current_node_id, context)
 
                 else:
                     raise NodeExecutionError("UNKNOWN_NODE_TYPE", args={"node_type": node_type})
@@ -298,7 +331,7 @@ class Flow:
         yield event.step_finished(step_name=f"flow:{self.name}")
 
     async def _stream_sequential(self, context: "FlowContext") -> AsyncIterator[dict[str, Any]]:
-        """顺序流式执行（原有逻辑）"""
+        """顺序流式执行"""
         for node in self.nodes:
             node_id = node.get("id")
             if not node_id:
@@ -320,6 +353,7 @@ class Flow:
     async def _stream_edge_driven(self, context: "FlowContext") -> AsyncIterator[dict[str, Any]]:
         """边驱动流式执行"""
         current_node_id: str | None = self.nodes[0]["id"] if self.nodes else None
+        visit_count: dict[str, int] = {}
 
         while current_node_id:
             node = self.get_node_config(current_node_id)
@@ -330,13 +364,20 @@ class Flow:
                 )
                 raise NodeExecutionError("NODE_NOT_FOUND", args={"node_id": current_node_id})
 
+            # 循环计数与超限检测
+            visit_count[current_node_id] = visit_count.get(current_node_id, 0) + 1
+            force_fallback = self._check_cycle_limit(current_node_id, visit_count)
+            if force_fallback:
+                current_node_id = self._resolve_next_node(current_node_id, context, force_fallback=True)
+                continue
+
             context.current_node = current_node_id
             node_type: str = node.get("type", "")
 
             if node_type == "message":
                 async for evt in self._emit_message(node, context):
                     yield evt
-                current_node_id = self._resolve_next_node(current_node_id, "done")
+                current_node_id = self._resolve_next_node(current_node_id, context)
 
             elif node_type == "parallel":
                 config = node.get("config", {})
@@ -355,9 +396,14 @@ class Flow:
                         context.set_output(branch_id, result)
 
                 await asyncio.gather(*[_exec_branch(bid) for bid in branches])
-                context.set_output(current_node_id, {"choice": "done"})
+                merged: dict[str, Any] = {}
+                for bid in branches:
+                    branch_result = context.outputs.get(bid, {})
+                    if isinstance(branch_result, dict):
+                        merged.update(branch_result)
+                context.set_output(current_node_id, merged)
                 yield event.step_finished(step_name=f"parallel:{current_node_id}")
-                current_node_id = self._resolve_next_node(current_node_id, "done")
+                current_node_id = self._resolve_next_node(current_node_id, context)
 
             elif node_type == "iteration":
                 config = node.get("config", {})
@@ -389,47 +435,12 @@ class Flow:
 
                 context.set_output(current_node_id, {"results": results})
                 yield event.step_finished(step_name=f"iteration:{current_node_id}")
-                current_node_id = self._resolve_next_node(current_node_id, "done")
-
-            elif node_type == "loop":
-                config = node.get("config", {})
-                body_nodes_l: list[str] = config.get("body", [])
-                condition_node_id = config.get("condition_node")
-                break_cond = config.get("break_condition", "done")
-                max_iter = config.get("max_iterations", 10)
-                loop_var = config.get("loop_variable", "loop_count")
-
-                yield event.step_started(step_name=f"loop:{current_node_id}")
-                for iteration in range(max_iter):
-                    context.set_variable(loop_var, iteration)
-                    for body_node_id in body_nodes_l:
-                        body_node = self.get_node_config(body_node_id)
-                        if not body_node:
-                            continue
-                        body_type = body_node.get("type", "")
-                        body_handler = self._node_handlers.get(body_type)
-                        if body_handler:
-                            body_result = await body_handler.execute(body_node, context)
-                            context.set_output(body_node_id, body_result)
-                    # 检查终止条件
-                    if condition_node_id:
-                        cond_result = context.outputs.get(condition_node_id, {})
-                        if isinstance(cond_result, dict) and cond_result.get("choice") == break_cond:
-                            break
-
-                context.set_output(current_node_id, {"choice": "done"})
-                yield event.step_finished(step_name=f"loop:{current_node_id}")
-                current_node_id = self._resolve_next_node(current_node_id, "done")
+                current_node_id = self._resolve_next_node(current_node_id, context)
 
             elif node_type in self._node_handlers:
-                # 所有执行类节点统一分发
                 async for evt in self._execute_node_with_retry(node, context, current_node_id):
                     yield evt
-                result = context.outputs.get(current_node_id, {})
-                route_key = self._extract_route_key(result)
-                current_node_id = self._resolve_next_node(current_node_id, route_key) or self._resolve_next_node(
-                    current_node_id, "done"
-                )
+                current_node_id = self._resolve_next_node(current_node_id, context)
 
             else:
                 yield event.run_error(

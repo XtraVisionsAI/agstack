@@ -60,4 +60,5 @@ class FlowLoader:
             nodes=nodes,
             edges=config.get("edges", []),
             variables=config.get("variables", {}),
+            cycle_limits=config.get("cycle_limits", {}),
         )

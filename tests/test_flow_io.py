@@ -130,28 +130,51 @@ class TestTool:
         assert result.error is not None and "boom" in result.error
 
 
-# ── _extract_route_key ──
+# ── _eval_condition ──
 
 
-class TestExtractRouteKey:
-    """路由键提取测试"""
+class TestEvalCondition:
+    """条件表达式求值测试"""
 
-    def test_dict_with_choice(self):
-        assert Flow._extract_route_key({"choice": "qa"}) == "qa"
+    def test_eq_string(self):
+        flow = Flow(flow_id="t", name="t")
+        ctx = FlowContext()
+        ctx.set_output("detect1", {"choice": "qa"})
+        assert flow._eval_condition("$o.detect1.choice == qa", ctx) is True
+        assert flow._eval_condition("$o.detect1.choice == chitchat", ctx) is False
 
-    def test_dict_without_choice(self):
-        assert Flow._extract_route_key({"result": "hello"}) == "done"
+    def test_eq_bool(self):
+        flow = Flow(flow_id="t", name="t")
+        ctx = FlowContext(variables={"has_context": True})
+        assert flow._eval_condition("$v.has_context == true", ctx) is True
+        assert flow._eval_condition("$v.has_context == false", ctx) is False
 
-    def test_dict_empty(self):
-        assert Flow._extract_route_key({}) == "done"
+    def test_numeric_comparison(self):
+        flow = Flow(flow_id="t", name="t")
+        ctx = FlowContext()
+        ctx.set_output("eval", {"score": 0.9})
+        assert flow._eval_condition("$o.eval.score > 0.8", ctx) is True
+        assert flow._eval_condition("$o.eval.score < 0.8", ctx) is False
+        assert flow._eval_condition("$o.eval.score >= 0.9", ctx) is True
+        assert flow._eval_condition("$o.eval.score <= 0.9", ctx) is True
 
-    def test_non_dict(self):
-        assert Flow._extract_route_key("some string") == "done"
-        assert Flow._extract_route_key(None) == "done"
-        assert Flow._extract_route_key(42) == "done"
+    def test_neq(self):
+        flow = Flow(flow_id="t", name="t")
+        ctx = FlowContext(variables={"status": "error"})
+        assert flow._eval_condition("$v.status != ok", ctx) is True
+        assert flow._eval_condition("$v.status != error", ctx) is False
 
-    def test_choice_as_non_string(self):
-        assert Flow._extract_route_key({"choice": 123}) == "123"
+    def test_truthy_check(self):
+        flow = Flow(flow_id="t", name="t")
+        ctx = FlowContext(variables={"flag": True, "empty": ""})
+        assert flow._eval_condition("$v.flag", ctx) is True
+        assert flow._eval_condition("$v.empty", ctx) is False
+        assert flow._eval_condition("$v.missing", ctx) is False
+
+    def test_type_error_returns_false(self):
+        flow = Flow(flow_id="t", name="t")
+        ctx = FlowContext(variables={"name": "alice"})
+        assert flow._eval_condition("$v.name > 5", ctx) is False
 
 
 # ── NodeHandler.resolve_inputs ──
@@ -460,33 +483,66 @@ class TestLLMChatNodeHandler:
 
 
 class TestFlowRouting:
-    """Flow 路由和 loop break 测试"""
+    """Flow 路由测试"""
 
-    def test_resolve_next_node_with_condition(self):
+    def test_resolve_next_node_with_expression(self):
         flow = Flow(
             flow_id="test",
             name="test",
             edges=[
-                {"source": "detect1", "condition": "qa", "target": "qa_node"},
-                {"source": "detect1", "condition": "chitchat", "target": "chat_node"},
-                {"source": "detect1", "condition": "done", "target": "end_node"},
+                {"source": "detect1", "condition": "$o.detect1.choice == qa", "target": "qa_node"},
+                {"source": "detect1", "condition": "$o.detect1.choice == chitchat", "target": "chat_node"},
+                {"source": "detect1", "target": "end_node"},
             ],
         )
-        assert flow._resolve_next_node("detect1", "qa") == "qa_node"
-        assert flow._resolve_next_node("detect1", "chitchat") == "chat_node"
-        assert flow._resolve_next_node("detect1", "done") == "end_node"
+        ctx = FlowContext()
+        ctx.set_output("detect1", {"choice": "qa"})
+        assert flow._resolve_next_node("detect1", ctx) == "qa_node"
 
-    def test_route_key_from_detect_result(self):
-        """detect 返回 {"choice": "qa"} 应该正确路由"""
-        detect_result = {"choice": "qa"}
-        route_key = Flow._extract_route_key(detect_result)
-        assert route_key == "qa"
+        ctx.set_output("detect1", {"choice": "chitchat"})
+        assert flow._resolve_next_node("detect1", ctx) == "chat_node"
 
-    def test_route_key_from_normal_result(self):
-        """普通节点（无 choice）应该路由到 done"""
-        normal_result = {"result": "some text"}
-        route_key = Flow._extract_route_key(normal_result)
-        assert route_key == "done"
+        ctx.set_output("detect1", {"choice": "unknown"})
+        assert flow._resolve_next_node("detect1", ctx) == "end_node"
+
+    def test_fallback_edge(self):
+        """无条件边作为 fallback"""
+        flow = Flow(
+            flow_id="test",
+            name="test",
+            edges=[
+                {"source": "node1", "condition": "$v.x == yes", "target": "branch_a"},
+                {"source": "node1", "target": "branch_b"},
+            ],
+        )
+        ctx = FlowContext(variables={"x": "no"})
+        assert flow._resolve_next_node("node1", ctx) == "branch_b"
+
+    def test_no_matching_edge(self):
+        """所有条件都不满足且无 fallback 时返回 None"""
+        flow = Flow(
+            flow_id="test",
+            name="test",
+            edges=[
+                {"source": "node1", "condition": "$v.x == yes", "target": "branch_a"},
+            ],
+        )
+        ctx = FlowContext(variables={"x": "no"})
+        assert flow._resolve_next_node("node1", ctx) is None
+
+    def test_cycle_limit_forces_fallback(self):
+        """循环超限时强制走 fallback"""
+        flow = Flow(
+            flow_id="test",
+            name="test",
+            edges=[
+                {"source": "loop_node", "condition": "$v.done == false", "target": "loop_node"},
+                {"source": "loop_node", "target": "exit_node"},
+            ],
+        )
+        ctx = FlowContext(variables={"done": False})
+        # force_fallback=True 时跳过条件边
+        assert flow._resolve_next_node("loop_node", ctx, force_fallback=True) == "exit_node"
 
 
 # ── Full data flow integration ──
@@ -658,3 +714,123 @@ class TestLLMEmbedNodeHandler:
         asyncio.get_event_loop().run_until_complete(handler.execute(node, ctx))
         call_args = mock_client.embed.call_args
         assert call_args.kwargs["model"] == "bge-m3"
+
+
+# ── Cycle limits integration ──
+
+
+class TestCycleLimits:
+    """图级别循环边 + cycle_limits 集成测试"""
+
+    def test_cycle_terminates_at_limit(self):
+        """循环边在达到 cycle_limits 时强制走 fallback"""
+        flow = Flow(
+            flow_id="test",
+            name="cycle_test",
+            nodes=[
+                {
+                    "id": "counter",
+                    "type": "python",
+                    "config": {
+                        "code": ("def main(n=None, **kwargs):\n    return {'n': (n if n is not None else 0) + 1}"),
+                        "inputs": {"n": "$o.counter.n"},
+                    },
+                },
+                {
+                    "id": "done",
+                    "type": "python",
+                    "config": {"code": "def main(**kwargs):\n    return {'finished': True}"},
+                },
+            ],
+            edges=[
+                {"source": "counter", "condition": "$o.counter.n < 100", "target": "counter"},
+                {"source": "counter", "target": "done"},
+            ],
+            cycle_limits={"counter": 3},
+        )
+        ctx = FlowContext()
+        asyncio.get_event_loop().run_until_complete(flow.run(ctx))
+        # counter 最多执行 3 次，第 4 次进入时触发超限走 fallback
+        assert ctx.outputs["counter"]["n"] == 3
+        assert ctx.outputs["done"] == {"finished": True}
+
+    def test_cycle_without_limit_follows_condition(self):
+        """无 cycle_limits 时正常按条件退出循环"""
+        flow = Flow(
+            flow_id="test",
+            name="natural_exit",
+            nodes=[
+                {
+                    "id": "inc",
+                    "type": "python",
+                    "config": {
+                        "code": ("def main(n=None, **kwargs):\n    return {'n': (n if n is not None else 0) + 1}"),
+                        "inputs": {"n": "$o.inc.n"},
+                    },
+                },
+                {
+                    "id": "end",
+                    "type": "python",
+                    "config": {"code": "def main(**kwargs):\n    return {'end': True}"},
+                },
+            ],
+            edges=[
+                {"source": "inc", "condition": "$o.inc.n < 5", "target": "inc"},
+                {"source": "inc", "target": "end"},
+            ],
+        )
+        ctx = FlowContext()
+        asyncio.get_event_loop().run_until_complete(flow.run(ctx))
+        assert ctx.outputs["inc"]["n"] == 5
+        assert ctx.outputs["end"] == {"end": True}
+
+
+# ── Parallel merge integration ──
+
+
+class TestParallelMerge:
+    """并行节点自动合并测试"""
+
+    def test_parallel_auto_merges_branch_results(self):
+        """parallel 节点各分支的 dict 结果自动合并"""
+        flow = Flow(
+            flow_id="test",
+            name="parallel_merge",
+            nodes=[
+                {
+                    "id": "par",
+                    "type": "parallel",
+                    "config": {"branches": ["kw_search", "vec_search"]},
+                },
+                {
+                    "id": "kw_search",
+                    "type": "python",
+                    "config": {"code": "def main(**kwargs):\n    return {'keyword_results': [1, 2]}"},
+                },
+                {
+                    "id": "vec_search",
+                    "type": "python",
+                    "config": {"code": "def main(**kwargs):\n    return {'vector_results': [3, 4]}"},
+                },
+                {
+                    "id": "merge_consumer",
+                    "type": "python",
+                    "config": {
+                        "code": (
+                            "def main(kw=None, vec=None, **kwargs):\n    return {'combined': (kw or []) + (vec or [])}"
+                        ),
+                        "inputs": {
+                            "kw": "$o.par.keyword_results",
+                            "vec": "$o.par.vector_results",
+                        },
+                    },
+                },
+            ],
+            edges=[
+                {"source": "par", "target": "merge_consumer"},
+            ],
+        )
+        ctx = FlowContext()
+        asyncio.get_event_loop().run_until_complete(flow.run(ctx))
+        assert ctx.outputs["par"] == {"keyword_results": [1, 2], "vector_results": [3, 4]}
+        assert ctx.outputs["merge_consumer"] == {"combined": [1, 2, 3, 4]}

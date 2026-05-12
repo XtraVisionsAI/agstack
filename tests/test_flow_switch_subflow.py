@@ -293,8 +293,8 @@ class TestSwitchEdgeRouting:
                 },
             ],
             edges=[
-                {"source": "model_switch", "target": "agent_a", "condition": "strong"},
-                {"source": "model_switch", "target": "pipeline_b", "condition": "basic"},
+                {"source": "model_switch", "condition": "$o.model_switch.choice == strong", "target": "agent_a"},
+                {"source": "model_switch", "condition": "$o.model_switch.choice == basic", "target": "pipeline_b"},
             ],
         )
 
@@ -330,8 +330,8 @@ class TestSwitchEdgeRouting:
                 },
             ],
             edges=[
-                {"source": "sw", "target": "node_a", "condition": "a"},
-                {"source": "sw", "target": "node_b", "condition": "b"},
+                {"source": "sw", "condition": "$o.sw.choice == a", "target": "node_a"},
+                {"source": "sw", "condition": "$o.sw.choice == b", "target": "node_b"},
             ],
         )
 
