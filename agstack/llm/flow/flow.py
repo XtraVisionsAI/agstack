@@ -146,6 +146,34 @@ class Flow:
 
     # ── 带重试的节点执行（统一走 NodeHandler） ──
 
+    def _resolve_visibility(self, node_type: str, config: dict) -> tuple[str | None, bool]:
+        """从 node config 和 registry 解析可见性（label, echo）
+
+        优先级：flow node config > registry 注册属性
+        """
+        from .registry import registry
+
+        label = config.get("label")
+        explicit_echo = "echo" in config
+        echo = config.get("echo", False)
+
+        if not explicit_echo and label is None:
+            if node_type == "agent":
+                agent_name = config.get("agent_name", "")
+                label = registry.get_agent_label(agent_name)
+                if not label:
+                    echo = registry.get_agent_echo(agent_name)
+            elif node_type == "tool":
+                tool_name = config.get("tool_name", "")
+                label = registry.get_tool_label(tool_name)
+                if not label:
+                    echo = registry.get_tool_echo(tool_name)
+
+        if label and not explicit_echo:
+            echo = True
+
+        return label, echo
+
     async def _execute_node_with_retry(
         self,
         node: dict,
@@ -164,6 +192,7 @@ class Flow:
 
         policy = self._get_retry_policy(node)
         label = handler.get_step_name(node, node_id)
+        vis_label, vis_echo = self._resolve_visibility(node_type, node.get("config", {}))
         last_error: Exception | None = None
 
         for attempt in range(policy.max_retries + 1):
@@ -184,6 +213,9 @@ class Flow:
                     )
 
                 async for evt in handler.stream(node, context, node_id):
+                    evt["_node_id"] = node_id
+                    evt["_label"] = vis_label
+                    evt["_echo"] = vis_echo
                     yield evt
                 return
 
@@ -376,13 +408,20 @@ class Flow:
 
             if node_type == "message":
                 async for evt in self._emit_message(node, context):
+                    evt["_node_id"] = current_node_id
+                    evt["_label"] = None
+                    evt["_echo"] = False
                     yield evt
                 current_node_id = self._resolve_next_node(current_node_id, context)
 
             elif node_type == "parallel":
                 config = node.get("config", {})
                 branches = config.get("branches", [])
-                yield event.step_started(step_name=f"parallel:{current_node_id}")
+                step_evt = event.step_started(step_name=f"parallel:{current_node_id}")
+                step_evt["_node_id"] = current_node_id
+                step_evt["_label"] = None
+                step_evt["_echo"] = False
+                yield step_evt
 
                 async def _exec_branch(branch_id: str) -> None:
                     branch_node = self.get_node_config(branch_id)
@@ -402,7 +441,11 @@ class Flow:
                     if isinstance(branch_result, dict):
                         merged.update(branch_result)
                 context.set_output(current_node_id, merged)
-                yield event.step_finished(step_name=f"parallel:{current_node_id}")
+                fin_evt = event.step_finished(step_name=f"parallel:{current_node_id}")
+                fin_evt["_node_id"] = current_node_id
+                fin_evt["_label"] = None
+                fin_evt["_echo"] = False
+                yield fin_evt
                 current_node_id = self._resolve_next_node(current_node_id, context)
 
             elif node_type == "iteration":
@@ -417,7 +460,11 @@ class Flow:
                 body_nodes: list[str] = config.get("body", [])
                 results: list[Any] = []
 
-                yield event.step_started(step_name=f"iteration:{current_node_id}")
+                step_evt = event.step_started(step_name=f"iteration:{current_node_id}")
+                step_evt["_node_id"] = current_node_id
+                step_evt["_label"] = None
+                step_evt["_echo"] = False
+                yield step_evt
                 for idx, item in enumerate(items):
                     context.set_variable(item_var, item)
                     context.set_variable(index_var, idx)
@@ -434,7 +481,11 @@ class Flow:
                         results.append(context.outputs.get(body_nodes[-1]))
 
                 context.set_output(current_node_id, {"results": results})
-                yield event.step_finished(step_name=f"iteration:{current_node_id}")
+                fin_evt = event.step_finished(step_name=f"iteration:{current_node_id}")
+                fin_evt["_node_id"] = current_node_id
+                fin_evt["_label"] = None
+                fin_evt["_echo"] = False
+                yield fin_evt
                 current_node_id = self._resolve_next_node(current_node_id, context)
 
             elif node_type in self._node_handlers:

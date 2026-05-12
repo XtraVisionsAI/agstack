@@ -19,13 +19,17 @@ class AgentNodeHandler(NodeHandler):
 
     node_type = "agent"
 
-    _NODE_KEYS = frozenset({"agent_name", "inputs"})
+    _NODE_KEYS = frozenset({"agent_name", "inputs", "label", "echo"})
 
-    def _create_agent(self, config: dict):
+    def _create_agent(self, config: dict, context: "FlowContext"):
         agent_name = config.get("agent_name")
         if not agent_name:
             raise FlowError("MISSING_AGENT_NAME", 400)
-        agent_kwargs = {k: v for k, v in config.items() if k not in self._NODE_KEYS}
+        agent_kwargs = {
+            k: context.resolve_reference(v) if isinstance(v, str) else v
+            for k, v in config.items()
+            if k not in self._NODE_KEYS
+        }
         agent = registry.create_agent(agent_name, **agent_kwargs)
         if not agent:
             raise FlowError("AGENT_NOT_FOUND", 404, {"agent_name": agent_name})
@@ -34,8 +38,10 @@ class AgentNodeHandler(NodeHandler):
     async def execute(self, node: dict, context: "FlowContext") -> Any:
         config = node.get("config", {})
         resolved = self.resolve_inputs(config, context)
-        ag = self._create_agent(config)
-        return await ag.run(context, inputs=resolved)
+        ag = self._create_agent(config, context)
+        result = await ag.run(context, inputs=resolved)
+        structured = context.outputs.pop(ag.name, None)
+        return structured if structured is not None else result
 
     async def stream(self, node: dict, context: "FlowContext", node_id: str) -> AsyncIterator[dict[str, Any]]:
         config = node.get("config", {})
@@ -43,9 +49,13 @@ class AgentNodeHandler(NodeHandler):
 
         yield event.step_started(step_name=step_name)
         resolved = self.resolve_inputs(config, context)
-        ag = self._create_agent(config)
+        ag = self._create_agent(config, context)
         async for evt in ag.stream(context, inputs=resolved):
             yield evt
-        result = context.get_last_output(ag.name) or ""
-        context.set_output(node_id, {"result": result})
+        structured = context.outputs.pop(ag.name, None)
+        if structured is not None:
+            context.set_output(node_id, structured)
+        else:
+            result = context.get_last_output(ag.name) or ""
+            context.set_output(node_id, {"result": result})
         yield event.step_finished(step_name=step_name)
