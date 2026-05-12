@@ -1,3 +1,9 @@
+## 1.15.0 (2026-05-12)
+
+### Feat
+
+- **flow**: expression-based edge conditions, graph-level cycles, parallel auto-merge
+
 ## 1.14.0 (2026-05-08)
 
 ### Feat
