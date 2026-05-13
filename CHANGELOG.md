@@ -1,3 +1,9 @@
+## 1.16.1 (2026-05-13)
+
+### Fix
+
+- **flow**: message node reads label/echo from config instead of hardcoding
+
 ## 1.16.0 (2026-05-12)
 
 ### Feat
