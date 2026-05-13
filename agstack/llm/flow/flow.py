@@ -407,10 +407,11 @@ class Flow:
             node_type: str = node.get("type", "")
 
             if node_type == "message":
+                msg_config = node.get("config", {})
                 async for evt in self._emit_message(node, context):
                     evt["_node_id"] = current_node_id
-                    evt["_label"] = None
-                    evt["_echo"] = False
+                    evt["_label"] = msg_config.get("label")
+                    evt["_echo"] = msg_config.get("echo", True)
                     yield evt
                 current_node_id = self._resolve_next_node(current_node_id, context)
 
