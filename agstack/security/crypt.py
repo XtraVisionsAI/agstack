@@ -126,4 +126,5 @@ def _get_hmac_str(plaintext: str, secret_key: str) -> str:
     :return: Base64 编码的 HMAC 结果
     """
     h = hmac.new(secret_key.encode("utf-8"), plaintext.encode("utf-8"), hashlib.sha512)
-    return base64.b64encode(h.digest()).decode("ascii")
+    result = base64.b64encode(h.digest()).decode("ascii")
+    return result[:72]
