@@ -1,3 +1,9 @@
+## 1.16.2 (2026-05-16)
+
+### Fix
+
+- **security**: truncate HMAC result to 72 bytes for bcrypt 5.0 compatibility
+
 ## 1.16.1 (2026-05-13)
 
 ### Fix
