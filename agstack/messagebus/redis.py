@@ -2,6 +2,7 @@
 
 import asyncio
 from collections.abc import AsyncIterator
+from typing import Self
 
 import redis.asyncio as aioredis
 from redis.asyncio.client import PubSub
@@ -17,15 +18,21 @@ class RedisSubscription(Subscription):
         self._channels = channels
         self._task: asyncio.Task[None] | None = None
         self._queue: asyncio.Queue[tuple[str, bytes]] = asyncio.Queue()
+        self._started = False
         self._closed = False
 
     async def _start(self) -> None:
-        """订阅 channel 并启动后台监听任务"""
+        if self._started:
+            return
+        self._started = True
         await self._pubsub.subscribe(*self._channels)
         self._task = asyncio.create_task(self._listen())
 
+    async def __aenter__(self) -> Self:
+        await self._start()
+        return self
+
     async def _listen(self) -> None:
-        """后台监听 Redis Pub/Sub 消息"""
         try:
             async for msg in self._pubsub.listen():
                 if self._closed:
@@ -47,6 +54,8 @@ class RedisSubscription(Subscription):
         return self
 
     async def __anext__(self) -> tuple[str, bytes]:
+        if not self._started:
+            await self._start()
         if self._closed and self._queue.empty():
             raise StopAsyncIteration
         try:
@@ -79,9 +88,7 @@ class RedisMessageBus(MessageBus):
 
     def subscribe(self, *channels: str) -> RedisSubscription:
         pubsub = self._client.pubsub()
-        sub = RedisSubscription(pubsub, channels)
-        # 调用方需要在 async with 或手动 await _start() 后使用
-        return sub
+        return RedisSubscription(pubsub, channels)
 
     async def close(self) -> None:
         await self._client.aclose()

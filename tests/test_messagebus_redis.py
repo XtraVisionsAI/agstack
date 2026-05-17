@@ -26,29 +26,34 @@ async def bus():
 
 class TestPublishSubscribe:
     async def test_single_channel(self, bus: RedisMessageBus) -> None:
-        sub = bus.subscribe("test:ch1")
-        await sub._start()
-        async with sub:
+        async with bus.subscribe("test:ch1") as sub:
             await asyncio.sleep(0.1)
             await bus.publish("test:ch1", b"hello")
-            channel, message = await asyncio.wait_for(sub.__anext__(), timeout=3)
+            channel, message = await asyncio.wait_for(anext(sub), timeout=3)
             assert channel == "test:ch1"
             assert message == b"hello"
 
     async def test_multi_channel(self, bus: RedisMessageBus) -> None:
-        sub = bus.subscribe("test:ch1", "test:ch2")
-        await sub._start()
-        async with sub:
+        async with bus.subscribe("test:ch1", "test:ch2") as sub:
             await asyncio.sleep(0.1)
             await bus.publish("test:ch1", b"msg1")
             await bus.publish("test:ch2", b"msg2")
             results = []
             for _ in range(2):
-                ch, msg = await asyncio.wait_for(sub.__anext__(), timeout=3)
+                ch, msg = await asyncio.wait_for(anext(sub), timeout=3)
                 results.append((ch, msg))
             channels = [r[0] for r in results]
             assert "test:ch1" in channels
             assert "test:ch2" in channels
+
+    async def test_lazy_start_without_context_manager(self, bus: RedisMessageBus) -> None:
+        sub = bus.subscribe("test:ch1")
+        await asyncio.sleep(0.1)
+        await bus.publish("test:ch1", b"world")
+        channel, message = await asyncio.wait_for(anext(sub), timeout=3)
+        assert channel == "test:ch1"
+        assert message == b"world"
+        await sub.close()
 
     async def test_publish_no_subscribers(self, bus: RedisMessageBus) -> None:
         await bus.publish("test:nobody", b"lost message")
@@ -56,10 +61,9 @@ class TestPublishSubscribe:
 
 class TestSubscriptionClose:
     async def test_close(self, bus: RedisMessageBus) -> None:
-        sub = bus.subscribe("test:ch1")
-        await sub._start()
-        await asyncio.sleep(0.1)
-        await sub.close()
+        async with bus.subscribe("test:ch1") as sub:
+            await asyncio.sleep(0.1)
+        assert sub._closed
 
 
 class TestBusClose:
