@@ -1,3 +1,9 @@
+## 1.17.1 (2026-05-17)
+
+### Fix
+
+- **messagebus**: auto-start RedisSubscription on __aenter__ and __anext__
+
 ## 1.17.0 (2026-05-17)
 
 ### Feat
