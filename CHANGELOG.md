@@ -1,3 +1,13 @@
+## 1.17.0 (2026-05-17)
+
+### Feat
+
+- add cache and messagebus modules with memory/redis backends
+
+### Refactor
+
+- **deps**: move infra dependencies to optional extras
+
 ## 1.16.2 (2026-05-16)
 
 ### Fix
