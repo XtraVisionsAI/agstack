@@ -17,6 +17,7 @@ repos:
           - pycasbin
           - pydantic
           - pytest-asyncio
+          - redis>=5.0
           - RestrictedPython
           - sqlalchemy[asyncio]
           - sqlobjects

@@ -57,11 +57,16 @@ dependencies = [
     "tiktoken>=0.12.0",
     "uvicorn>=0.46.0",
 ]
+
+[project.optional-dependencies]
+redis = ["redis>=5.0"]
+
 [dependency-groups]
 dev = [
     "pre-commit>=4.6.0",
     "pyright>=1.1.409",
     "pytest>=9.0.3",
+    "pytest-asyncio>=1.0.0",
     "ruff>=0.15.12",
     "setuptools>=82.0.0",
 ]
@@ -72,7 +77,7 @@ dev = [
 #default = true
 
 [tool.pyright]
-include = ["app", "depends"]
+include = ["app", "depends", "agstack/cache", "agstack/messagebus", "tests"]
 exclude = ["**/__pycache__"]
 pythonVersion = "3.12"
 reportMissingImports = "error"
@@ -119,3 +124,8 @@ tag_format = "$version"
 version_scheme = "pep440"
 version_provider = "uv"
 update_changelog_on_bump = true
+
+[tool.pytest.ini_options]
+markers = [
+    "redis: 需要真实 Redis 连接的测试",
+]
