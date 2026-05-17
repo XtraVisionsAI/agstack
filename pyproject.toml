@@ -39,13 +39,9 @@ classifiers = [
 ]
 requires-python = ">=3.12"
 dependencies = [
-    "aio-pika>=9.6.2",
-    "asyncpg>=0.30.0",
-    "elasticsearch[async]>=9.3.0",
     "fastapi>=0.136.1",
     "jwcrypto>=1.5.7",
     "loguru>=0.7.3",
-    "nebula3-python>=3.8.3",
     "openai>=2.34.0",
     "bcrypt>=4.0.0",
     "pycasbin>=2.8.0",
@@ -59,7 +55,14 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+mq = ["aio-pika>=9.6.2"]
+db = ["asyncpg>=0.30.0"]
+es = ["elasticsearch[async]>=9.3.0"]
+graph = ["nebula3-python>=3.8.3"]
 redis = ["redis>=5.0"]
+std = ["agstack[mq]", "agstack[db]"]
+pro = ["agstack[std]", "agstack[es]"]
+ent = ["agstack[pro]", "agstack[graph]"]
 
 [dependency-groups]
 dev = [

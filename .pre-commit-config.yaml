@@ -7,6 +7,7 @@ repos:
         additional_dependencies:
           - ag-ui-protocol
           - aio_pika
+          - asyncpg
           - elasticsearch[async]
           - fastapi
           - jwcrypto

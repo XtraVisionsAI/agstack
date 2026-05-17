@@ -7,14 +7,10 @@ name = "agstack"
 version = "1.16.2"
 source = { virtual = "." }
 dependencies = [
-    { name = "aio-pika" },
-    { name = "asyncpg" },
     { name = "bcrypt" },
-    { name = "elasticsearch", extra = ["async"] },
     { name = "fastapi" },
     { name = "jwcrypto" },
     { name = "loguru" },
-    { name = "nebula3-python" },
     { name = "openai" },
     { name = "pycasbin" },
     { name = "pydantic" },
@@ -27,8 +23,35 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+db = [
+    { name = "asyncpg" },
+]
+ent = [
+    { name = "aio-pika" },
+    { name = "asyncpg" },
+    { name = "elasticsearch", extra = ["async"] },
+    { name = "nebula3-python" },
+]
+es = [
+    { name = "elasticsearch", extra = ["async"] },
+]
+graph = [
+    { name = "nebula3-python" },
+]
+mq = [
+    { name = "aio-pika" },
+]
+pro = [
+    { name = "aio-pika" },
+    { name = "asyncpg" },
+    { name = "elasticsearch", extra = ["async"] },
+]
 redis = [
     { name = "redis" },
+]
+std = [
+    { name = "aio-pika" },
+    { name = "asyncpg" },
 ]
 
 [package.dev-dependencies]
@@ -43,14 +66,20 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "aio-pika", specifier = ">=9.6.2" },
-    { name = "asyncpg", specifier = ">=0.30.0" },
+    { name = "agstack", extras = ["db"], marker = "extra == 'std'" },
+    { name = "agstack", extras = ["es"], marker = "extra == 'pro'" },
+    { name = "agstack", extras = ["graph"], marker = "extra == 'ent'" },
+    { name = "agstack", extras = ["mq"], marker = "extra == 'std'" },
+    { name = "agstack", extras = ["pro"], marker = "extra == 'ent'" },
+    { name = "agstack", extras = ["std"], marker = "extra == 'pro'" },
+    { name = "aio-pika", marker = "extra == 'mq'", specifier = ">=9.6.2" },
+    { name = "asyncpg", marker = "extra == 'db'", specifier = ">=0.30.0" },
     { name = "bcrypt", specifier = ">=4.0.0" },
-    { name = "elasticsearch", extras = ["async"], specifier = ">=9.3.0" },
+    { name = "elasticsearch", extras = ["async"], marker = "extra == 'es'", specifier = ">=9.3.0" },
     { name = "fastapi", specifier = ">=0.136.1" },
     { name = "jwcrypto", specifier = ">=1.5.7" },
     { name = "loguru", specifier = ">=0.7.3" },
-    { name = "nebula3-python", specifier = ">=3.8.3" },
+    { name = "nebula3-python", marker = "extra == 'graph'", specifier = ">=3.8.3" },
     { name = "openai", specifier = ">=2.34.0" },
     { name = "pycasbin", specifier = ">=2.8.0" },
     { name = "pydantic", specifier = ">=2.13.3" },
@@ -62,7 +91,7 @@ requires-dist = [
     { name = "tiktoken", specifier = ">=0.12.0" },
     { name = "uvicorn", specifier = ">=0.46.0" },
 ]
-provides-extras = ["redis"]
+provides-extras = ["mq", "db", "es", "graph", "redis", "std", "pro", "ent"]
 
 [package.metadata.requires-dev]
 dev = [
