@@ -48,4 +48,9 @@ class NodeHandler:
         yield event.step_started(step_name=step_name)
         result = await self.execute(node, context)
         context.set_output(node_id, result)
+
+        # 可观测性：drain tool 执行记录
+        for record in context.pop_execution_records():
+            yield event.custom(name="tool_execution", value=record)
+
         yield event.step_finished(step_name=step_name)

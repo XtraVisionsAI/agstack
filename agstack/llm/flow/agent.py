@@ -88,6 +88,10 @@ class Agent:
     ) -> AsyncIterator[dict[str, Any]]:
         """流式执行 Agent，输出 AG-UI 标准事件"""
 
+        # 注入 agent_call_id 供 tool 审计关联
+        agent_call_id = str(uuid4())
+        context.set_variable("_agent_call_id", agent_call_id)
+
         # 输入来源：优先 inputs 参数，回退到 context.variables
         user_input = ""
         if inputs:
@@ -230,6 +234,7 @@ class Agent:
                 context.set_output(self.name, {"result": assistant_content})
                 # AG-UI: TEXT_MESSAGE_END
                 yield event.text_message_end(message_id=msg_id)
+                context.set_variable("_agent_call_id", None)
                 return
 
             # 执行工具调用
@@ -265,6 +270,11 @@ class Agent:
 
                 # AG-UI: TOOL_CALL_RESULT
                 yield event.tool_call_result(tool_call_id=tool_call["id"], content=result_content)
+
+                # 可观测性：yield tool 执行记录
+                for record in context.pop_execution_records():
+                    record["tool_call_id"] = tool_call["id"]
+                    yield event.custom(name="tool_execution", value=record)
 
             # 更新消息列表，继续下一轮
             messages = [self.get_system_message()] + context.history + context.get_messages(self.name)

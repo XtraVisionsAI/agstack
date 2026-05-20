@@ -2,7 +2,9 @@
 
 """工具定义和执行"""
 
+import json
 import logging
+import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Callable
 
@@ -54,18 +56,38 @@ class Tool:
         self.echo = echo
 
     async def execute_async(self, context: "FlowContext", inputs: dict[str, Any] | None = None) -> ToolResult:
-        """异步执行工具"""
+        """异步执行工具（包含计时和可观测性记录）"""
+        args = inputs or {}
+        _t0 = time.perf_counter()
+        result = await self._execute(context, args)
+        _duration_ms = int((time.perf_counter() - _t0) * 1000)
+
+        result_content = json.dumps(result.result) if result.success else json.dumps({"error": result.error})
+        context.execution_records.append({
+            "agent_call_id": context.get_variable("_agent_call_id"),
+            "tool_name": self.name,
+            "tool_args": args,
+            "success": result.success,
+            "result": result_content,
+            "error": result.error,
+            "duration_ms": _duration_ms,
+        })
+
+        return result
+
+    async def _execute(self, context: "FlowContext", inputs: dict[str, Any]) -> ToolResult:
+        """实际执行逻辑，子类应覆写此方法"""
         try:
-            result = self.function(context, inputs or {})
+            result = self.function(context, inputs)
             if hasattr(result, "__await__"):
                 result = await result
 
-            return ToolResult(name=self.name, arguments=inputs or {}, result=result, success=True)
+            return ToolResult(name=self.name, arguments=inputs, result=result, success=True)
         except Exception as e:
             logger.warning("Tool %s failed: %s", self.name, e, exc_info=True)
             return ToolResult(
                 name=self.name,
-                arguments=inputs or {},
+                arguments=inputs,
                 result={},
                 success=False,
                 error=str(e),

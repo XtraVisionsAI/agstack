@@ -151,3 +151,9 @@ class FlowContext:
         if task_id is None:
             return self.execution_records
         return [r for r in self.execution_records if r.get("task_id") == task_id]
+
+    def pop_execution_records(self) -> list[dict[str, Any]]:
+        """取出并清空待发射的执行记录"""
+        records = self.execution_records
+        self.execution_records = []
+        return records
