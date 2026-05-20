@@ -1,3 +1,9 @@
+## 1.18.0 (2026-05-20)
+
+### Feat
+
+- **flow**: add tool execution observability via structured audit events
+
 ## 1.17.1 (2026-05-17)
 
 ### Fix
