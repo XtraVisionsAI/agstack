@@ -1,3 +1,9 @@
+## 1.19.0 (2026-05-21)
+
+### Feat
+
+- **flow**: add FlowTrace structured execution tracing and declarative tool contracts
+
 ## 1.18.0 (2026-05-20)
 
 ### Feat
