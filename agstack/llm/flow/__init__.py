@@ -23,6 +23,7 @@ from .records import Record, Status
 from .registry import registry
 from .state import FlowState
 from .tool import Tool, ToolResult
+from .trace import EdgeTrace, FlowTrace, NodeTrace
 
 
 register_node_handler = registry.register_node_handler
@@ -35,6 +36,10 @@ __all__ = [
     "Flow",
     "FlowContext",
     "Usage",
+    # 结构化执行轨迹
+    "FlowTrace",
+    "NodeTrace",
+    "EdgeTrace",
     # 节点处理器
     "NodeHandler",
     "register_node_handler",

@@ -3,6 +3,7 @@
 """Flow 定义和执行"""
 
 import asyncio
+import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, AsyncIterator
 from uuid import uuid4
@@ -127,8 +128,27 @@ class Flow:
             cond = edge.get("condition")
             if cond is None:
                 fallback_target = edge.get("target")
-            elif not force_fallback and self._eval_condition(cond, context):
-                return edge.get("target")
+            elif not force_fallback:
+                satisfied = self._eval_condition(cond, context)
+                context.trace.record_edge(
+                    current_id,
+                    edge.get("target"),
+                    condition=cond,
+                    condition_value=satisfied,
+                    satisfied=satisfied,
+                )
+                if satisfied:
+                    return edge.get("target")
+
+        # 记录最终选中的 fallback 边
+        if fallback_target is not None:
+            context.trace.record_edge(
+                current_id,
+                fallback_target,
+                condition=None,
+                condition_value=None,
+                satisfied=True,
+            )
         return fallback_target
 
     # ── message 节点 ──
@@ -349,16 +369,22 @@ class Flow:
 
     async def stream(self, context: "FlowContext") -> AsyncIterator[dict[str, Any]]:
         """流式执行 Flow（输出 AG-UI 标准事件）"""
+        context.trace.started_at = time.time()
         yield event.step_started(step_name=f"flow:{self.name}")
 
-        if not self.edges:
-            # 向后兼容：无 edges 时按 nodes 列表顺序执行（原有逻辑）
-            async for evt in self._stream_sequential(context):
-                yield evt
-        else:
-            # edge 驱动执行
-            async for evt in self._stream_edge_driven(context):
-                yield evt
+        try:
+            if not self.edges:
+                async for evt in self._stream_sequential(context):
+                    yield evt
+            else:
+                async for evt in self._stream_edge_driven(context):
+                    yield evt
+        except Exception as e:
+            context.trace.error = str(e)
+            raise
+        finally:
+            context.trace.finished_at = time.time()
+            context.trace.total_usage = context.usage
 
         yield event.step_finished(step_name=f"flow:{self.name}")
 
@@ -408,32 +434,73 @@ class Flow:
 
             if node_type == "message":
                 msg_config = node.get("config", {})
+                context.trace.record_node_start(current_node_id, "message", inputs=msg_config)
+
+                # message 节点增加 STEP 事件
+                step_evt = event.step_started(step_name=f"message:{current_node_id}")
+                step_evt["_node_id"] = current_node_id
+                step_evt["_label"] = msg_config.get("label")
+                step_evt["_echo"] = msg_config.get("echo", True)
+                yield step_evt
+
                 async for evt in self._emit_message(node, context):
                     evt["_node_id"] = current_node_id
                     evt["_label"] = msg_config.get("label")
                     evt["_echo"] = msg_config.get("echo", True)
                     yield evt
+
+                # 存储 message 输出
+                template = msg_config.get("content", "")
+                text = template.format_map(_SafeFormatDict(context.variables))
+                context.set_output(current_node_id, {"result": text})
+
+                fin_evt = event.step_finished(step_name=f"message:{current_node_id}")
+                fin_evt["_node_id"] = current_node_id
+                fin_evt["_label"] = msg_config.get("label")
+                fin_evt["_echo"] = msg_config.get("echo", True)
+                yield fin_evt
+
+                context.trace.record_node_end(current_node_id, outputs={"result": text})
                 current_node_id = self._resolve_next_node(current_node_id, context)
 
             elif node_type == "parallel":
                 config = node.get("config", {})
                 branches = config.get("branches", [])
+
+                context.trace.record_node_start(current_node_id, "parallel", inputs=config)
+
                 step_evt = event.step_started(step_name=f"parallel:{current_node_id}")
                 step_evt["_node_id"] = current_node_id
                 step_evt["_label"] = None
                 step_evt["_echo"] = False
                 yield step_evt
 
-                async def _exec_branch(branch_id: str) -> None:
+                parallel_qid = context.trace._qualify_id(current_node_id)
+
+                async def _exec_branch(branch_id: str, _parent_qid: str = parallel_qid) -> None:
                     branch_node = self.get_node_config(branch_id)
                     if not branch_node:
                         return
-                    context.current_node = branch_id
                     branch_type = branch_node.get("type", "")
+                    branch_config = branch_node.get("config", {})
                     branch_handler = self._node_handlers.get(branch_type)
-                    if branch_handler:
+                    if not branch_handler:
+                        return
+
+                    context.trace.record_node_start(
+                        branch_id,
+                        branch_type,
+                        inputs=branch_config.get("inputs", {}),
+                        parent_id=_parent_qid,
+                    )
+                    context.current_node = branch_id
+                    try:
                         result = await branch_handler.execute(branch_node, context)
                         context.set_output(branch_id, result)
+                        context.trace.record_node_end(branch_id, outputs=result)
+                    except Exception as e:
+                        context.trace.record_node_end(branch_id, error=str(e))
+                        raise
 
                 await asyncio.gather(*[_exec_branch(bid) for bid in branches])
                 merged: dict[str, Any] = {}
@@ -442,11 +509,14 @@ class Flow:
                     if isinstance(branch_result, dict):
                         merged.update(branch_result)
                 context.set_output(current_node_id, merged)
+
                 fin_evt = event.step_finished(step_name=f"parallel:{current_node_id}")
                 fin_evt["_node_id"] = current_node_id
                 fin_evt["_label"] = None
                 fin_evt["_echo"] = False
                 yield fin_evt
+
+                context.trace.record_node_end(current_node_id, outputs=merged)
                 current_node_id = self._resolve_next_node(current_node_id, context)
 
             elif node_type == "iteration":
@@ -461,11 +531,14 @@ class Flow:
                 body_nodes: list[str] = config.get("body", [])
                 results: list[Any] = []
 
+                context.trace.record_node_start(current_node_id, "iteration", inputs=config)
+
                 step_evt = event.step_started(step_name=f"iteration:{current_node_id}")
                 step_evt["_node_id"] = current_node_id
                 step_evt["_label"] = None
                 step_evt["_echo"] = False
                 yield step_evt
+
                 for idx, item in enumerate(items):
                     context.set_variable(item_var, item)
                     context.set_variable(index_var, idx)
@@ -474,24 +547,77 @@ class Flow:
                         if not body_node:
                             continue
                         body_type = body_node.get("type", "")
+                        body_config = body_node.get("config", {})
                         body_handler = self._node_handlers.get(body_type)
-                        if body_handler:
-                            body_result = await body_handler.execute(body_node, context)
-                            context.set_output(body_node_id, body_result)
+                        if not body_handler:
+                            continue
+
+                        context.trace.record_node_start(
+                            body_node_id,
+                            body_type,
+                            inputs=body_config.get("inputs", {}),
+                            parent_id=context.trace._qualify_id(current_node_id),
+                            iteration_index=idx,
+                        )
+                        body_result = await body_handler.execute(body_node, context)
+                        context.set_output(body_node_id, body_result)
+                        # 收集 body 节点产生的 execution_records
+                        body_tool_calls = context.pop_execution_records()
+                        context.trace.record_node_end(
+                            body_node_id,
+                            outputs=body_result,
+                            tool_calls=body_tool_calls if body_tool_calls else None,
+                        )
                     if body_nodes:
                         results.append(context.outputs.get(body_nodes[-1]))
 
-                context.set_output(current_node_id, {"results": results})
+                iteration_output = {"results": results}
+                context.set_output(current_node_id, iteration_output)
+
                 fin_evt = event.step_finished(step_name=f"iteration:{current_node_id}")
                 fin_evt["_node_id"] = current_node_id
                 fin_evt["_label"] = None
                 fin_evt["_echo"] = False
                 yield fin_evt
+
+                context.trace.record_node_end(current_node_id, outputs=iteration_output)
                 current_node_id = self._resolve_next_node(current_node_id, context)
 
             elif node_type in self._node_handlers:
+                # 获取 resolved inputs 用于 trace
+                config = node.get("config", {})
+                handler = self._node_handlers[node_type]
+                resolved_inputs = handler.resolve_inputs(config, context)
+
+                context.trace.record_node_start(
+                    current_node_id,
+                    node_type,
+                    inputs=resolved_inputs,
+                    label=config.get("label"),
+                )
+
                 async for evt in self._execute_node_with_retry(node, context, current_node_id):
                     yield evt
+
+                # 收集 agent 节点存放的 tool_calls 或通用 execution_records
+                tool_calls = context.get_variable("_last_node_tool_calls")
+                if tool_calls is None:
+                    tool_calls = context.pop_execution_records() or None
+                else:
+                    context.set_variable("_last_node_tool_calls", None)
+
+                # 获取可选的 messages（agent 节点）
+                messages = None
+                if node_type == "agent" and context.get_variable("_capture_messages"):
+                    agent_name = config.get("agent_name", "")
+                    messages = context.get_messages(agent_name) if agent_name else None
+
+                context.trace.record_node_end(
+                    current_node_id,
+                    outputs=context.outputs.get(current_node_id),
+                    tool_calls=tool_calls if tool_calls else None,
+                    messages=messages,
+                )
                 current_node_id = self._resolve_next_node(current_node_id, context)
 
             else:

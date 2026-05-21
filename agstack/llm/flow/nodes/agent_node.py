@@ -58,4 +58,9 @@ class AgentNodeHandler(NodeHandler):
         else:
             result = context.get_last_output(ag.name) or ""
             context.set_output(node_id, {"result": result})
+
+        # 一次性收集累积的 tool 执行记录，供 flow 引擎存入 NodeTrace
+        tool_calls = context.pop_execution_records()
+        context.set_variable("_last_node_tool_calls", tool_calls)
+
         yield event.step_finished(step_name=step_name)

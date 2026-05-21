@@ -5,8 +5,12 @@
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
+
+
+if TYPE_CHECKING:
+    from .trace import FlowTrace
 
 
 @dataclass
@@ -55,6 +59,18 @@ class FlowContext:
 
     # 执行记录（可选）
     execution_records: list[dict[str, Any]] = field(default_factory=list)
+
+    # 结构化执行轨迹
+    trace: "FlowTrace" = field(default=None, repr=False)  # type: ignore[assignment]
+
+    # 业务自定义事件缓冲（tool 内部通过 context 注入，agent 循环中 flush）
+    pending_custom_events: list[dict[str, Any]] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        if self.trace is None:
+            from .trace import FlowTrace
+
+            self.trace = FlowTrace()
 
     def get_variable(self, key: str, default: Any = None) -> Any:
         """获取变量值"""
@@ -157,3 +173,9 @@ class FlowContext:
         records = self.execution_records
         self.execution_records = []
         return records
+
+    def pop_pending_custom_events(self) -> list[dict[str, Any]]:
+        """取出并清空待发射的业务自定义事件"""
+        events = self.pending_custom_events
+        self.pending_custom_events = []
+        return events

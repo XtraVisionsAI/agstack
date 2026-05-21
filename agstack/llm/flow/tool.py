@@ -24,6 +24,8 @@ class ToolResult:
     result: dict[str, Any]
     success: bool
     error: str | None = None
+    content: str | None = None
+    summary: str | None = None
 
 
 class Tool:
@@ -38,6 +40,9 @@ class Tool:
         *,
         label: str | None = None,
         echo: bool = False,
+        category: str | None = None,
+        summary_fn: Callable[["ToolResult"], str | None] | None = None,
+        result_formatter: Callable[["ToolResult"], str] | None = None,
     ):
         """初始化工具
 
@@ -47,6 +52,9 @@ class Tool:
         :param parameters: JSON Schema 参数定义（用于 LLM 调用）
         :param label: 面向用户的展示名称（控制 STEP/TOOL_CALL 进度事件可见性）
         :param echo: 是否转发 TEXT_MESSAGE 给用户
+        :param category: 工具分类（retrieval / analysis / action / utility）
+        :param summary_fn: 生成面向用户摘要的函数 (ToolResult) -> str | None
+        :param result_formatter: 自定义 LLM 内容格式化函数 (ToolResult) -> str
         """
         self.name = name
         self.description = description
@@ -54,24 +62,45 @@ class Tool:
         self.parameters = parameters or {"type": "object", "properties": {}, "required": []}
         self.label = label
         self.echo = echo
+        self.category = category
+        self.summary_fn = summary_fn
+        self.result_formatter = result_formatter
 
     async def execute_async(self, context: "FlowContext", inputs: dict[str, Any] | None = None) -> ToolResult:
-        """异步执行工具（包含计时和可观测性记录）"""
+        """异步执行工具（包含计时、摘要生成、结果格式化、可观测性记录）"""
         args = inputs or {}
         _t0 = time.perf_counter()
         result = await self._execute(context, args)
         _duration_ms = int((time.perf_counter() - _t0) * 1000)
 
-        result_content = json.dumps(result.result) if result.success else json.dumps({"error": result.error})
-        context.execution_records.append({
-            "agent_call_id": context.get_variable("_agent_call_id"),
-            "tool_name": self.name,
-            "tool_args": args,
-            "success": result.success,
-            "result": result_content,
-            "error": result.error,
-            "duration_ms": _duration_ms,
-        })
+        # 计算 LLM 消费内容
+        if self.result_formatter:
+            try:
+                result.content = self.result_formatter(result)
+            except Exception:
+                result.content = json.dumps(result.result) if result.success else json.dumps({"error": result.error})
+        else:
+            result.content = json.dumps(result.result) if result.success else json.dumps({"error": result.error})
+
+        # 生成面向用户的摘要
+        if self.summary_fn:
+            try:
+                result.summary = self.summary_fn(result)
+            except Exception:
+                result.summary = None
+
+        context.execution_records.append(
+            {
+                "agent_call_id": context.get_variable("_agent_call_id"),
+                "tool_name": self.name,
+                "tool_args": args,
+                "success": result.success,
+                "result": result.content,
+                "error": result.error,
+                "duration_ms": _duration_ms,
+                "summary": result.summary,
+            }
+        )
 
         return result
 

@@ -264,17 +264,30 @@ class Agent:
                 # 执行工具（传入 LLM 解析的参数作为 inputs）
                 result = await tool.execute_async(context, tool_args)
 
-                # 保存工具结果
-                result_content = json.dumps(result.result) if result.success else json.dumps({"error": result.error})
+                # 使用 result.content 作为 LLM 上下文（Tool 已计算好）
+                result_content = result.content or (
+                    json.dumps(result.result) if result.success else json.dumps({"error": result.error})
+                )
                 context.add_message(self.name, "tool", content=result_content, tool_call_id=tool_call["id"])
 
                 # AG-UI: TOOL_CALL_RESULT
                 yield event.tool_call_result(tool_call_id=tool_call["id"], content=result_content)
 
-                # 可观测性：yield tool 执行记录
-                for record in context.pop_execution_records():
-                    record["tool_call_id"] = tool_call["id"]
-                    yield event.custom(name="tool_execution", value=record)
+                # 实时用户进度 — 有 summary 时告知前端
+                if result.summary:
+                    yield event.custom(
+                        name="tool_progress",
+                        value={
+                            "tool_call_id": tool_call["id"],
+                            "tool_name": result.name,
+                            "success": result.success,
+                            "summary": result.summary,
+                        },
+                    )
+
+                # 业务自定义事件 — flush pending
+                for pending_evt in context.pop_pending_custom_events():
+                    yield pending_evt
 
             # 更新消息列表，继续下一轮
             messages = [self.get_system_message()] + context.history + context.get_messages(self.name)

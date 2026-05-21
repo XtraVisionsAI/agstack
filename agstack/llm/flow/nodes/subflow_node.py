@@ -67,8 +67,12 @@ class SubflowNodeHandler(NodeHandler):
         self._resolve_and_apply_inputs(config, context)
         sub_flow = self._load_subflow(config)
 
-        async for evt in sub_flow.stream(context):
-            yield evt
+        context.trace.push_namespace(node_id)
+        try:
+            async for evt in sub_flow.stream(context):
+                yield evt
+        finally:
+            context.trace.pop_namespace()
 
         result = self._get_last_node_output(sub_flow, context)
         context.set_output(node_id, result)
