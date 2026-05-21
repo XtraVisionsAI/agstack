@@ -17,7 +17,10 @@ class MyAgent(Agent):
             model="gpt-4o",               # LLM model to use
             tools=[tool1, tool2],         # Optional: Tools the agent can call
             temperature=0.7,              # Optional: LLM temperature
-            max_tokens=2000               # Optional: Response token limit
+            max_tokens=2000,              # Optional: Response token limit
+            max_turns=10,                 # Optional: Max tool-loop iterations
+            label="Processing...",        # Optional: User-visible step label
+            echo=False,                   # Optional: Forward TEXT_MESSAGE to user
         )
 ```
 
@@ -45,10 +48,7 @@ registry.register_tool("web_search", WebSearchTool)
 registry.register_tool("calculator", CalculatorTool)
 
 # Create tools list
-tools = [
-    registry.create_tool("web_search"),
-    registry.create_tool("calculator")
-]
+tools = registry.create_tools(["web_search", "calculator"])
 
 class ResearchAgent(Agent):
     def __init__(self):
@@ -67,56 +67,55 @@ Agents must be registered before use:
 ```python
 from agstack.llm.flow import registry
 
-# Register with factory function
-registry.register_agent("chat", lambda: ChatAgent())
-registry.register_agent("research", lambda: ResearchAgent())
+# Register agent class (not instance, not lambda)
+registry.register_agent("chat", ChatAgent)
+registry.register_agent("research", ResearchAgent)
 ```
 
 ## Running Agents
 
-### Synchronous Execution
+### Non-Streaming Execution
 
 ```python
 from agstack.llm.flow import FlowContext, create_agent
 
 # Create context
-context = FlowContext(session_id="user123")
+context = FlowContext()
 context.set_variable("query", "What is Python?")
 
 # Get agent and run
 agent = create_agent("chat")
 response = await agent.run(context)
 
-print(response.content)  # Agent's response
-print(response.token_usage)  # Token usage info
+print(response["result"])  # Agent's response text
+print(context.usage)       # Token usage info
 ```
 
 ### Streaming Execution
 
 ```python
-from agstack.llm.flow.events import EventType
+from agstack.llm.flow import EventType
 
-async for event in agent.stream(context):
-    event_type = event.get("type")
-    
+async for evt in agent.stream(context):
+    event_type = evt.get("type")
+
     if event_type == EventType.TEXT_MESSAGE_CONTENT:
         # Stream text content as it arrives
-        print(event.get("delta"), end="", flush=True)
-    
+        print(evt.get("delta"), end="", flush=True)
+
     elif event_type == EventType.TOOL_CALL_START:
         # Agent started calling a tool
-        tool_name = event.get("toolCallName")
+        tool_name = evt.get("toolCallName")
         print(f"\n[Calling tool: {tool_name}]")
-    
+
     elif event_type == EventType.TOOL_CALL_RESULT:
         # Tool execution completed
-        result = event.get("result")
+        result = evt.get("content")
         print(f"[Tool result: {result}]")
-    
-    elif event_type == EventType.AGENT_MESSAGE_COMPLETED:
+
+    elif event_type == EventType.TEXT_MESSAGE_END:
         # Agent finished its response
-        final_content = event.get("content")
-        token_usage = event.get("token_usage")
+        print("\n[Done]")
 ```
 
 ## Agent Context
@@ -124,30 +123,28 @@ async for event in agent.stream(context):
 Agents access execution state through FlowContext:
 
 ```python
-async def my_custom_logic(context: FlowContext):
-    # Get variables
-    user_query = context.get_variable("query")
-    user_id = context.get_variable("user_id")
-    
-    # Get conversation history
-    messages = context.message_history
-    
-    # Set variables for later use
-    context.set_variable("processed", True)
+# Set input for agent (two options)
+context.set_variable("input", "user message here")
+# or
+context.set_variable("query", "user message here")
+
+# After execution, get agent's output
+output = context.outputs.get("agent_name")  # {"result": "..."}
+last_msg = context.get_last_output("agent_name")  # Last assistant text
 ```
 
 ## Multi-Turn Conversations
 
-Agents automatically handle multi-turn conversations:
+Agents automatically handle multi-turn conversations (messages are scoped per agent name):
 
 ```python
-context = FlowContext(session_id="conversation_123")
+context = FlowContext()
 
 # Turn 1
 context.set_variable("query", "What is FastAPI?")
 response1 = await agent.run(context)
 
-# Turn 2 - context retains conversation history
+# Turn 2 - context retains conversation history for this agent
 context.set_variable("query", "Can you give me an example?")
 response2 = await agent.run(context)  # Agent knows previous context
 ```
@@ -161,7 +158,7 @@ When an agent uses tools, agstack automatically manages the request-response loo
 3. Tool executes and returns result
 4. Result is added to conversation
 5. Agent continues with tool result
-6. Process repeats until agent gives final answer
+6. Process repeats until agent gives final answer (up to `max_turns`)
 
 This is handled automatically - you don't need to manage the loop.
 
@@ -170,7 +167,7 @@ This is handled automatically - you don't need to manage the loop.
 ```python
 response = await agent.run(context)
 
-usage = response.token_usage
+usage = context.usage
 print(f"Prompt tokens: {usage.prompt_tokens}")
 print(f"Completion tokens: {usage.completion_tokens}")
 print(f"Total tokens: {usage.total_tokens}")
@@ -179,13 +176,13 @@ print(f"Total tokens: {usage.total_tokens}")
 ## Error Handling
 
 ```python
-from agstack.llm.flow.exceptions import AgentError
+from agstack.llm.flow.exceptions import FlowError
 
 try:
     agent = create_agent("my_agent")
     response = await agent.run(context)
-except AgentError as e:
-    print(f"Agent execution failed: {e}")
+except FlowError as e:
+    print(f"Agent execution failed: {e.error_key}")
 except RuntimeError as e:
     print(f"Agent not found: {e}")
 ```
@@ -194,11 +191,11 @@ except RuntimeError as e:
 
 1. **Clear Instructions**: Write specific, detailed system prompts
 2. **Appropriate Tools**: Only provide tools the agent actually needs
-3. **Model Selection**: Use gpt-4o for complex reasoning, gpt-3.5-turbo for simple tasks
-4. **Session Management**: Use unique session_id for each conversation thread
-5. **Error Handling**: Always handle AgentError and RuntimeError
-6. **Token Limits**: Set max_tokens to prevent excessive responses
-7. **Temperature**: Use lower values (0.1-0.3) for consistent results, higher (0.7-0.9) for creative tasks
+3. **Model Selection**: Use gpt-4o for complex reasoning, lighter models for simple tasks
+4. **Error Handling**: Always handle FlowError and RuntimeError
+5. **Token Limits**: Set max_tokens to prevent excessive responses
+6. **Temperature**: Use lower values (0.1-0.3) for consistent results, higher (0.7-0.9) for creative tasks
+7. **max_turns**: Set appropriate loop limit to prevent infinite tool calling
 
 ## Common Patterns
 

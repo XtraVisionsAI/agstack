@@ -2,7 +2,7 @@
 
 ## What are Flows?
 
-Flows orchestrate multiple agents and tools into complex, multi-step workflows. They enable you to build sophisticated AI applications by chaining together different components in a defined sequence.
+Flows orchestrate multiple agents and tools into complex, multi-step workflows. They enable you to build sophisticated AI applications by chaining together different components in a defined sequence or graph.
 
 ## Flow Anatomy
 
@@ -16,10 +16,10 @@ flow = Flow(
     nodes=[                          # List of execution steps
         {
             "id": "step1",           # Unique node ID
-            "type": "tool",          # Node type: "tool" or "agent"
+            "type": "tool",          # Node type
             "config": {              # Node configuration
                 "tool_name": "...",
-                "parameters": {...}
+                "inputs": {"key": "$v.var_name"}
             }
         },
         {
@@ -27,15 +27,94 @@ flow = Flow(
             "type": "agent",
             "config": {
                 "agent_name": "...",
-                "parameters": {...}
+                "inputs": {"input": "$o.step1.result"}
             }
         }
-    ]
+    ],
+    edges=[                          # Routing (optional, enables graph mode)
+        {"source": "step1", "target": "step2"}
+    ],
+    variables={},                    # Default variables
+    cycle_limits={}                  # Per-node iteration caps
 )
 
 # Execute flow
-context = FlowContext(session_id="user123")
+context = FlowContext()
 result = await flow.run(context)
+```
+
+## Two Execution Modes
+
+### Sequential Mode (no edges)
+
+When `edges` is empty, nodes execute in order:
+
+```python
+flow = Flow(
+    flow_id="sequential",
+    name="Sequential Flow",
+    nodes=[
+        {"id": "step1", "type": "tool", "config": {...}},
+        {"id": "step2", "type": "agent", "config": {...}},
+        {"id": "step3", "type": "tool", "config": {...}}
+    ]
+)
+```
+
+### Edge-Driven Mode (with edges)
+
+When `edges` is provided, execution follows the graph:
+
+```python
+flow = Flow(
+    flow_id="graph",
+    name="Graph Flow",
+    nodes=[
+        {"id": "start", "type": "tool", "config": {...}},
+        {"id": "branch_a", "type": "agent", "config": {...}},
+        {"id": "branch_b", "type": "agent", "config": {...}},
+    ],
+    edges=[
+        {"source": "start", "target": "branch_a", "condition": "$o.start.type == urgent"},
+        {"source": "start", "target": "branch_b"}  # fallback (no condition)
+    ]
+)
+```
+
+## Variable References
+
+Flows use a reference syntax to pass data between nodes:
+
+### Output References (`$o.`)
+
+Access results from previous nodes:
+
+```python
+"$o.node_id"              # Full output of a node
+"$o.node_id.field"        # Access nested field
+"$o.node_id.user.name"    # Deep nested access
+```
+
+### Variable References (`$v.`)
+
+Access flow-level variables:
+
+```python
+"$v.variable_name"       # Access context.variables["variable_name"]
+```
+
+### Example
+
+```python
+# Set variables before running
+context.set_variable("user_id", "123")
+context.set_variable("topic", "Python")
+
+# In node config:
+"inputs": {
+    "id": "$v.user_id",           # → "123"
+    "data": "$o.fetch.result",    # → output of "fetch" node's "result" field
+}
 ```
 
 ## Creating Flows
@@ -52,9 +131,9 @@ flow = Flow(
             "type": "tool",
             "config": {
                 "tool_name": "create_user",
-                "parameters": {
-                    "email": "{input.email}",
-                    "name": "{input.name}"
+                "inputs": {
+                    "email": "$v.email",
+                    "name": "$v.name"
                 }
             }
         },
@@ -63,10 +142,10 @@ flow = Flow(
             "type": "tool",
             "config": {
                 "tool_name": "send_email",
-                "parameters": {
-                    "to": "{input.email}",
+                "inputs": {
+                    "to": "$v.email",
                     "subject": "Welcome!",
-                    "body": "Welcome to our platform, {input.name}!"
+                    "user_id": "$o.create_account.id"
                 }
             }
         }
@@ -86,7 +165,7 @@ flow = Flow(
             "type": "tool",
             "config": {
                 "tool_name": "web_search",
-                "parameters": {"query": "{input.topic}"}
+                "inputs": {"query": "$v.topic"}
             }
         },
         {
@@ -94,9 +173,7 @@ flow = Flow(
             "type": "agent",
             "config": {
                 "agent_name": "analyst",
-                "parameters": {
-                    "query": "Analyze these search results: {search@result}"
-                }
+                "inputs": {"input": "$o.search.result"}
             }
         },
         {
@@ -104,107 +181,93 @@ flow = Flow(
             "type": "agent",
             "config": {
                 "agent_name": "writer",
-                "parameters": {
-                    "query": "Create a summary based on: {analyze@result}"
-                }
+                "inputs": {"input": "$o.analyze.result"}
             }
         }
+    ],
+    edges=[
+        {"source": "search", "target": "analyze"},
+        {"source": "analyze", "target": "summarize"}
     ]
 )
 ```
 
-### Flow with Data Processing Pipeline
+### Flow with LLM Chat Node
 
 ```python
 flow = Flow(
-    flow_id="data_pipeline",
-    name="Data Processing Pipeline",
+    flow_id="classify_and_respond",
+    name="Classify and Respond",
     nodes=[
         {
-            "id": "fetch",
-            "type": "tool",
+            "id": "classify",
+            "type": "llm_chat",
             "config": {
-                "tool_name": "fetch_data",
-                "parameters": {"source": "{input.source}"}
+                "prompt": "Classify this request into one word (urgent/normal/spam): {query}",
+                "model": "gpt-4o",
+                "temperature": 0.1,
+                "inputs": {"query": "$v.user_query"}
             }
         },
         {
-            "id": "validate",
-            "type": "tool",
+            "id": "respond",
+            "type": "agent",
             "config": {
-                "tool_name": "validate_data",
-                "parameters": {"data": "{fetch@result}"}
-            }
-        },
-        {
-            "id": "transform",
-            "type": "tool",
-            "config": {
-                "tool_name": "transform_data",
-                "parameters": {"data": "{validate@result}"}
-            }
-        },
-        {
-            "id": "store",
-            "type": "tool",
-            "config": {
-                "tool_name": "store_data",
-                "parameters": {"data": "{transform@result}"}
+                "agent_name": "support",
+                "inputs": {
+                    "input": "$v.user_query",
+                    "priority": "$o.classify.result"
+                }
             }
         }
+    ],
+    edges=[
+        {"source": "classify", "target": "respond"}
     ]
 )
 ```
 
-## Variable References
+### Flow with Python Node
 
-Flows use a reference syntax to pass data between nodes:
-
-### Input Variables
-
-```python
-"{input.variable_name}"  # Access flow input
-```
-
-Example:
-```python
-context.set_variable("user_id", "123")
-# In node: "parameters": {"id": "{input.user_id}"}
-```
-
-### Node Results
-
-```python
-"{node_id@result}"  # Access result from previous node
-```
-
-Example:
 ```python
 {
-    "id": "process",
-    "type": "tool",
+    "id": "transform",
+    "type": "python",
     "config": {
-        "tool_name": "process_data",
-        "parameters": {"data": "{fetch@result}"}  # Use result from "fetch" node
+        "code": "def main(data, threshold):\n    filtered = [x for x in data if x > threshold]\n    return {'filtered': filtered, 'count': len(filtered)}",
+        "inputs": {
+            "data": "$o.fetch.items",
+            "threshold": "$v.min_score"
+        }
     }
 }
 ```
 
-### Nested Access
+### Flow with Switch Node
 
-```python
-"{node_id@result.field}"  # Access nested field in result
-"{node_id@result.user.name}"  # Access deeply nested field
-```
-
-Example:
 ```python
 {
-    "id": "greet",
-    "type": "tool",
+    "id": "route",
+    "type": "switch",
     "config": {
-        "tool_name": "greeting",
-        "parameters": {"name": "{lookup@result.user.name}"}
+        "variable": "$o.classify.result",
+        "cases": {"urgent": "urgent", "normal": "normal", "spam": "spam"},
+        "default": "normal"
+    }
+}
+# Output: {"choice": "<matched_case>"}
+# Use with edges: {"source": "route", "target": "handle_urgent", "condition": "$o.route.choice == urgent"}
+```
+
+### Flow with Subflow Node
+
+```python
+{
+    "id": "sub_process",
+    "type": "subflow",
+    "config": {
+        "flow_name": "registered_flow_name",  # from registry
+        "inputs": {"data": "$o.previous.result"}
     }
 }
 ```
@@ -217,83 +280,177 @@ Example:
 from agstack.llm.flow import FlowContext
 
 # Create context with input variables
-context = FlowContext(session_id="session123")
+context = FlowContext()
 context.set_variable("topic", "Python programming")
 context.set_variable("user_id", "user456")
 
 # Run flow
 result = await flow.run(context)
 
-# Access results
-print(result.content)  # Final result
-print(result.records)  # Execution records for each node
+# Access results — returns context.outputs (dict of node_id → output)
+print(result)  # {"step1": {...}, "step2": {...}, ...}
 ```
 
-### Accessing Node Results
+### Accessing Node Outputs
 
 ```python
 result = await flow.run(context)
 
-# Get specific node result
-search_result = result.get_node_result("search")
-analyze_result = result.get_node_result("analyze")
+# Get specific node output
+search_output = result.get("search")      # or context.outputs["search"]
+analyze_output = result.get("analyze")
 
-# Iterate through all node results
-for node_id, node_result in result.records.items():
-    print(f"{node_id}: {node_result.content}")
+# All outputs are also accessible via context
+print(context.outputs["search"])
 ```
 
 ### Streaming Execution
 
 ```python
-from agstack.llm.flow.events import EventType
+from agstack.llm.flow import EventType
 
-async for event in flow.stream(context):
-    event_type = event.get("type")
-    
-    if event_type == EventType.FLOW_START:
-        print("Flow started")
-    
-    elif event_type == EventType.NODE_START:
-        node_id = event.get("nodeId")
-        print(f"Node {node_id} started")
-    
-    elif event_type == EventType.NODE_COMPLETED:
-        node_id = event.get("nodeId")
-        result = event.get("result")
-        print(f"Node {node_id} completed: {result}")
-    
+async for evt in flow.stream(context):
+    event_type = evt.get("type")
+
+    if event_type == EventType.STEP_STARTED:
+        step = evt.get("stepName")
+        print(f"Step started: {step}")
+
     elif event_type == EventType.TEXT_MESSAGE_CONTENT:
-        # Streaming content from agent nodes
-        print(event.get("delta"), end="", flush=True)
-    
-    elif event_type == EventType.FLOW_COMPLETED:
-        final_result = event.get("result")
-        print(f"\nFlow completed: {final_result}")
+        # Streaming content from agent/llm_chat nodes
+        print(evt.get("delta"), end="", flush=True)
+
+    elif event_type == EventType.STEP_FINISHED:
+        step = evt.get("stepName")
+        print(f"\nStep finished: {step}")
+
+    elif event_type == EventType.RUN_ERROR:
+        print(f"Error: {evt.get('message')}")
 ```
 
-## Flow Context
+## Edge Conditions
 
-FlowContext manages state throughout flow execution:
+Edges support comparison expressions:
 
 ```python
-# Create context
-context = FlowContext(session_id="session123")
+edges=[
+    # Equality
+    {"source": "A", "target": "B", "condition": "$o.A.status == success"},
 
-# Set input variables
-context.set_variable("user_id", "123")
-context.set_variable("action", "process")
+    # Inequality
+    {"source": "A", "target": "C", "condition": "$o.A.status != success"},
 
-# Get variables
-user_id = context.get_variable("user_id")
-action = context.get_variable("action", default="default_value")
+    # Numeric comparisons
+    {"source": "A", "target": "D", "condition": "$o.A.score > 0.8"},
+    {"source": "A", "target": "E", "condition": "$o.A.count <= 10"},
 
-# Access node results during execution
-node_result = context.get_node_result("previous_node")
+    # Boolean (truthy check)
+    {"source": "A", "target": "F", "condition": "$o.A.is_valid"},
 
-# Check execution state
-messages = context.message_history
-token_usage = context.token_usage
+    # Fallback (no condition — used when no conditional edge matches)
+    {"source": "A", "target": "G"}
+]
+```
+
+**Resolution order**: Conditional edges are evaluated first; the first match wins. If none match, the fallback edge (without condition) is used.
+
+## Cycle Limits
+
+For flows with loops (edges that create cycles), use `cycle_limits` to prevent infinite execution:
+
+```python
+flow = Flow(
+    flow_id="refine_loop",
+    name="Iterative Refinement",
+    nodes=[
+        {"id": "draft", "type": "agent", "config": {...}},
+        {"id": "review", "type": "agent", "config": {...}},
+    ],
+    edges=[
+        {"source": "draft", "target": "review"},
+        {"source": "review", "target": "draft", "condition": "$o.review.needs_revision == true"},
+        {"source": "review", "target": None}  # end
+    ],
+    cycle_limits={"draft": 5}  # "draft" node runs at most 5 times
+)
+```
+
+When a node exceeds its cycle limit, conditional edges are skipped and only the fallback edge is followed.
+
+## Retry Policy
+
+Nodes can specify retry behavior for transient failures:
+
+```python
+{
+    "id": "fragile",
+    "type": "tool",
+    "config": {
+        "tool_name": "external_api",
+        "inputs": {"url": "$v.api_url"},
+        "retry": {
+            "max_retries": 3,   # Retry up to 3 times after initial failure
+            "delay": 1.0,       # Initial delay in seconds
+            "backoff": 2.0      # Exponential backoff multiplier
+        }
+    }
+}
+```
+
+## Parallel Execution
+
+The `parallel` node type runs multiple branches concurrently:
+
+```python
+flow = Flow(
+    flow_id="parallel_fetch",
+    name="Parallel Fetch",
+    nodes=[
+        {
+            "id": "parallel_step",
+            "type": "parallel",
+            "config": {
+                "branches": ["fetch_a", "fetch_b", "fetch_c"]
+            }
+        },
+        {"id": "fetch_a", "type": "tool", "config": {"tool_name": "api_a", "inputs": {...}}},
+        {"id": "fetch_b", "type": "tool", "config": {"tool_name": "api_b", "inputs": {...}}},
+        {"id": "fetch_c", "type": "tool", "config": {"tool_name": "api_c", "inputs": {...}}},
+        {
+            "id": "merge",
+            "type": "python",
+            "config": {
+                "code": "def main(a, b, c):\n    return {'combined': [a, b, c]}",
+                "inputs": {
+                    "a": "$o.fetch_a",
+                    "b": "$o.fetch_b",
+                    "c": "$o.fetch_c"
+                }
+            }
+        }
+    ],
+    edges=[
+        {"source": "parallel_step", "target": "merge"}
+    ]
+)
+```
+
+## Iteration
+
+The `iteration` node type loops over a list:
+
+```python
+{
+    "id": "process_items",
+    "type": "iteration",
+    "config": {
+        "items": "$o.fetch.results",       # List to iterate over
+        "item_variable": "current_item",   # Variable name for current item
+        "index_variable": "current_index", # Variable name for index
+        "body": ["transform_step"]         # Node IDs to execute per item
+    }
+}
+# Output: {"results": [<output of last body node for each item>]}
 ```
 
 ## Flow Registration
@@ -303,8 +460,8 @@ Flows can be registered for reuse:
 ```python
 from agstack.llm.flow import registry
 
-# Register flow
-registry.register_flow("onboarding", lambda: user_onboarding_flow)
+# Register flow class/factory
+registry.register_flow("onboarding", lambda: onboarding_flow)
 registry.register_flow("research", lambda: research_flow)
 
 # Create flow from registry
@@ -313,277 +470,114 @@ flow = registry.create_flow("onboarding")
 
 ## Loading Flows from Configuration
 
-Flows can be defined in configuration files:
+Flows can be loaded from JSON files or dicts:
 
 ```python
-from agstack.llm.flow.loader import load_flow_from_config
+from agstack.llm.flow import FlowLoader
 
 # Load from dict
 config = {
     "flow_id": "my_flow",
     "name": "My Flow",
-    "nodes": [...]
+    "nodes": [...],
+    "edges": [...]
 }
-flow = load_flow_from_config(config)
+flow = FlowLoader.load_from_dict(config)
 
-# Load from YAML/JSON file
-flow = load_flow_from_file("flows/my_flow.yaml")
+# Load from JSON file
+flow = FlowLoader.load_from_file("flows/my_flow.json")
+
+# Load from JSON string
+flow = FlowLoader.load_from_string(json_str)
 ```
 
-Example YAML:
-```yaml
-flow_id: customer_support
-name: Customer Support Flow
-description: Handle customer support requests
-nodes:
-  - id: classify
-    type: agent
-    config:
-      agent_name: classifier
-      parameters:
-        query: "Classify this request: {input.request}"
-  
-  - id: handle
-    type: agent
-    config:
-      agent_name: support_agent
-      parameters:
-        query: "Handle {classify@result} request: {input.request}"
-  
-  - id: notify
-    type: tool
-    config:
-      tool_name: send_notification
-      parameters:
-        user_id: "{input.user_id}"
-        message: "Your request has been processed: {handle@result}"
+## FlowTrace (Structured Execution Trace)
+
+After flow execution, `context.trace` contains a complete structured trace:
+
+```python
+context = FlowContext()
+result = await flow.run(context)
+
+trace = context.trace
+print(f"Started: {trace.started_at}")
+print(f"Finished: {trace.finished_at}")
+print(f"Total usage: {trace.total_usage}")
+
+# Node traces contain timing, inputs, outputs, tool calls
+for node_trace in trace.nodes:
+    print(f"  {node_trace.node_id} ({node_trace.node_type}): {node_trace.duration_ms}ms")
+    if node_trace.tool_calls:
+        for tc in node_trace.tool_calls:
+            print(f"    tool: {tc['tool_name']} → {tc['success']}")
+
+# Edge traces record routing decisions
+for edge_trace in trace.edges:
+    print(f"  {edge_trace.source} → {edge_trace.target} (condition={edge_trace.condition}, satisfied={edge_trace.satisfied})")
 ```
 
 ## Error Handling
 
 ```python
-from agstack.llm.flow.exceptions import FlowError
+from agstack.llm.flow.exceptions import FlowError, NodeExecutionError
 
 try:
     result = await flow.run(context)
-except FlowError as e:
-    print(f"Flow execution failed: {e.error_key}")
-    print(f"Failed at node: {e.node_id}")
+except NodeExecutionError as e:
+    print(f"Node execution failed: {e.error_key}")
     print(f"Details: {e.arguments}")
+except FlowError as e:
+    print(f"Flow error: {e.error_key}")
 except Exception as e:
     print(f"Unexpected error: {e}")
 ```
 
-## Node Types
+## Node Types Reference
 
-### Tool Node
+| Type | Handler | Description |
+|------|---------|-------------|
+| `agent` | AgentNodeHandler | Multi-turn LLM with tool use |
+| `tool` | ToolNodeHandler | Execute registered tool |
+| `llm_chat` | LLMChatNodeHandler | Single-turn LLM call |
+| `python` | PythonNodeHandler | Sandboxed Python execution |
+| `switch` | SwitchNodeHandler | Variable-based routing |
+| `subflow` | SubflowNodeHandler | Execute another flow |
+| `detect` | DetectNodeHandler | Detection/classification |
+| `echo` | EchoNodeHandler | Pass-through echo |
+| `llm_embed` | LLMEmbedNodeHandler | Embedding generation |
+| `llm_rerank` | LLMRerankNodeHandler | Reranking |
+| `message` | (flow-level) | Template text output |
+| `parallel` | (flow-level) | Concurrent branches |
+| `iteration` | (flow-level) | Loop over items |
 
-Executes a registered tool:
+## Custom Node Handlers
 
-```python
-{
-    "id": "node_id",
-    "type": "tool",
-    "config": {
-        "tool_name": "registered_tool_name",
-        "parameters": {
-            "param1": "value1",
-            "param2": "{input.var}"
-        }
-    }
-}
-```
-
-### Agent Node
-
-Executes a registered agent:
+Register your own node types:
 
 ```python
-{
-    "id": "node_id",
-    "type": "agent",
-    "config": {
-        "agent_name": "registered_agent_name",
-        "parameters": {
-            "query": "Process this: {previous_node@result}"
-        }
-    }
-}
+from agstack.llm.flow import NodeHandler, register_node_handler
+
+class MyHandler(NodeHandler):
+    node_type = "my_type"
+
+    async def execute(self, node: dict, context: "FlowContext") -> Any:
+        config = node.get("config", {})
+        resolved = self.resolve_inputs(config, context)
+        # Custom logic
+        return {"result": "done"}
+
+register_node_handler("my_type", MyHandler())
 ```
 
 ## Best Practices
 
-1. **Clear Node IDs**: Use descriptive, meaningful node identifiers
-2. **Error Handling**: Always wrap flow execution in try-except
-3. **Variable Naming**: Use consistent, clear variable names
-4. **Node Ordering**: Order nodes logically - later nodes can reference earlier ones
-5. **Result Validation**: Validate node results before passing to next node
-6. **Session Management**: Use unique session_id for each flow execution
-7. **Configuration**: Store complex flows in YAML/JSON files
+1. **Use edges for complex flows**: Edge-driven mode enables conditional routing, cycles, and clear data flow
+2. **Clear Node IDs**: Use descriptive, meaningful node identifiers
+3. **Error Handling**: Always wrap flow execution in try-except
+4. **Reference syntax**: Use `$o.node_id.field` for outputs, `$v.key` for variables
+5. **Node Ordering**: In sequential mode, order nodes logically
+6. **Cycle Limits**: Always set `cycle_limits` for flows with loops
+7. **Configuration**: Store complex flows as JSON and load with `FlowLoader`
 8. **Testing**: Test each node independently before integrating into flow
-9. **Monitoring**: Log node results and execution times for debugging
-10. **Documentation**: Document expected inputs and outputs for each flow
-
-## Common Patterns
-
-### Sequential Processing
-
-```python
-Flow(
-    flow_id="sequential",
-    name="Sequential Processing",
-    nodes=[
-        {"id": "step1", "type": "tool", "config": {...}},
-        {"id": "step2", "type": "tool", "config": {...}},
-        {"id": "step3", "type": "tool", "config": {...}}
-    ]
-)
-```
-
-### Fetch-Process-Store
-
-```python
-Flow(
-    flow_id="etl",
-    name="ETL Pipeline",
-    nodes=[
-        {
-            "id": "extract",
-            "type": "tool",
-            "config": {"tool_name": "fetch_data", ...}
-        },
-        {
-            "id": "transform",
-            "type": "agent",
-            "config": {"agent_name": "processor", ...}
-        },
-        {
-            "id": "load",
-            "type": "tool",
-            "config": {"tool_name": "store_data", ...}
-        }
-    ]
-)
-```
-
-### Multi-Agent Collaboration
-
-```python
-Flow(
-    flow_id="collaboration",
-    name="Multi-Agent Workflow",
-    nodes=[
-        {
-            "id": "research",
-            "type": "agent",
-            "config": {"agent_name": "researcher", ...}
-        },
-        {
-            "id": "analyze",
-            "type": "agent",
-            "config": {"agent_name": "analyst", ...}
-        },
-        {
-            "id": "summarize",
-            "type": "agent",
-            "config": {"agent_name": "writer", ...}
-        }
-    ]
-)
-```
-
-### Human-in-the-Loop
-
-```python
-Flow(
-    flow_id="approval_flow",
-    name="Human Approval Flow",
-    nodes=[
-        {
-            "id": "draft",
-            "type": "agent",
-            "config": {"agent_name": "drafter", ...}
-        },
-        {
-            "id": "request_approval",
-            "type": "tool",
-            "config": {"tool_name": "send_approval_request", ...}
-        },
-        {
-            "id": "finalize",
-            "type": "tool",
-            "config": {
-                "tool_name": "finalize_document",
-                "parameters": {"approved": "{input.approval_status}"}
-            }
-        }
-    ]
-)
-```
-
-## Advanced Features
-
-### Dynamic Node Configuration
-
-```python
-# Parameters can be computed from multiple sources
-{
-    "id": "complex",
-    "type": "agent",
-    "config": {
-        "agent_name": "processor",
-        "parameters": {
-            "query": """
-                Process data from {fetch@result} 
-                for user {input.user_id}
-                with settings {config@result.settings}
-            """
-        }
-    }
-}
-```
-
-### Conditional Logic (via Agent Instructions)
-
-```python
-{
-    "id": "router",
-    "type": "agent",
-    "config": {
-        "agent_name": "router",
-        "parameters": {
-            "query": """
-                Based on {classify@result}, determine next action.
-                If urgent, use fast processing. Otherwise, use standard processing.
-            """
-        }
-    }
-}
-```
-
-### Parallel Execution Preparation
-
-While agstack currently executes nodes sequentially, you can prepare for future parallel execution:
-
-```python
-# These nodes could potentially run in parallel (future feature)
-Flow(
-    flow_id="parallel_ready",
-    name="Parallel-Ready Flow",
-    nodes=[
-        {"id": "fetch_a", "type": "tool", "config": {...}},  # Independent
-        {"id": "fetch_b", "type": "tool", "config": {...}},  # Independent
-        {
-            "id": "merge",
-            "type": "tool",
-            "config": {
-                "tool_name": "merge_data",
-                "parameters": {
-                    "data_a": "{fetch_a@result}",
-                    "data_b": "{fetch_b@result}"
-                }
-            }
-        }
-    ]
-)
-```
+9. **Monitoring**: Use `context.trace` for debugging and performance analysis
+10. **Retry**: Add retry policies for nodes calling external services

@@ -58,13 +58,13 @@ class ChatAgent(Agent):
             tools=[]  # Optional tools
         )
 
-# Register agent
-registry.register_agent("chat", lambda: ChatAgent())
+# Register agent (pass class, not instance)
+registry.register_agent("chat", ChatAgent)
 
 # Use agent
 from agstack.llm.flow import FlowContext, create_agent
 
-context = FlowContext(session_id="user123")
+context = FlowContext(flow_id="my-session")
 context.set_variable("query", "Hello!")
 
 agent = create_agent("chat")
@@ -94,13 +94,13 @@ class GreetingTool(Tool):
                 "required": ["name"]
             }
         )
-    
-    async def greet(self, context: FlowContext):
-        name = context.get_variable("name")
-        return f"Hello, {name}!"
+
+    async def greet(self, context: FlowContext, inputs: dict):
+        name = inputs.get("name", "World")
+        return {"message": f"Hello, {name}!"}
 
 # Register tool
-registry.register_tool("greeting", GreetingTool())
+registry.register_tool("greeting", GreetingTool)
 ```
 
 **See [tools.md](references/tools.md) for detailed tool documentation.**
@@ -121,7 +121,7 @@ flow = Flow(
             "type": "tool",
             "config": {
                 "tool_name": "greeting",
-                "parameters": {"name": "{input.user_name}"}
+                "inputs": {"name": "$v.user_name"}
             }
         },
         {
@@ -129,14 +129,14 @@ flow = Flow(
             "type": "agent",
             "config": {
                 "agent_name": "chat",
-                "parameters": {"query": "Respond to: {step1@result}"}
+                "inputs": {"input": "$o.step1.message"}
             }
         }
     ]
 )
 
 # Run flow
-context = FlowContext(session_id="session123")
+context = FlowContext()
 context.set_variable("user_name", "Alice")
 result = await flow.run(context)
 ```
@@ -156,9 +156,9 @@ class DatabaseQueryTool(Tool): ...
 class EmailSenderTool(Tool): ...
 
 # Register all tools
-registry.register_tool("web_search", WebSearchTool())
-registry.register_tool("db_query", DatabaseQueryTool())
-registry.register_tool("send_email", EmailSenderTool())
+registry.register_tool("web_search", WebSearchTool)
+registry.register_tool("db_query", DatabaseQueryTool)
+registry.register_tool("send_email", EmailSenderTool)
 ```
 
 ### 2. Create Agents
@@ -167,10 +167,7 @@ Build agents that use your tools:
 
 ```python
 # Create agent with tools
-tools = [
-    registry.create_tool("web_search"),
-    registry.create_tool("db_query")
-]
+tools = registry.create_tools(["web_search", "db_query"])
 
 class ResearchAgent(Agent):
     def __init__(self):
@@ -181,12 +178,12 @@ class ResearchAgent(Agent):
             tools=tools
         )
 
-registry.register_agent("researcher", lambda: ResearchAgent())
+registry.register_agent("researcher", ResearchAgent)
 ```
 
 ### 3. Orchestrate with Flows
 
-Combine agents and tools into workflows:
+Combine agents and tools into workflows using edge-driven routing:
 
 ```python
 research_flow = Flow(
@@ -198,7 +195,7 @@ research_flow = Flow(
             "type": "tool",
             "config": {
                 "tool_name": "web_search",
-                "parameters": {"query": "{input.topic}"}
+                "inputs": {"query": "$v.topic"}
             }
         },
         {
@@ -206,9 +203,12 @@ research_flow = Flow(
             "type": "agent",
             "config": {
                 "agent_name": "researcher",
-                "parameters": {"query": "Analyze: {search@result}"}
+                "inputs": {"input": "$o.search.result"}
             }
         }
+    ],
+    edges=[
+        {"source": "search", "target": "analyze"}
     ]
 )
 ```
@@ -226,8 +226,8 @@ response = await agent.run(context)
 result = await flow.run(context)
 
 # Streaming execution
-async for event in agent.stream(context):
-    # Process events
+async for evt in agent.stream(context):
+    # Process AG-UI events
     pass
 ```
 
@@ -240,10 +240,10 @@ All components use centralized registration:
 ```python
 from agstack.llm.flow import registry, create_agent, create_tool
 
-# Register components
-registry.register_agent("name", lambda: AgentClass())
-registry.register_tool("name", ToolInstance())
-registry.register_flow("name", lambda: FlowInstance())
+# Register components (pass class or factory)
+registry.register_agent("name", AgentClass)
+registry.register_tool("name", ToolClass)
+registry.register_flow("name", FlowClass)
 
 # Safe creation (returns None if not found)
 agent = registry.create_agent("name")
@@ -259,7 +259,7 @@ agent = create_agent("name")
 FlowContext manages state across execution:
 
 ```python
-context = FlowContext(session_id="unique_id")
+context = FlowContext(flow_id="unique_id")
 
 # Set input variables
 context.set_variable("key", "value")
@@ -268,12 +268,16 @@ context.set_variable("key", "value")
 value = context.get_variable("key")
 value = context.get_variable("key", default="default")
 
-# Access node results
-result = context.get_node_result("node_id")
+# Access node outputs (after flow execution)
+result = context.outputs.get("node_id")
+
+# Reference syntax for variable resolution
+resolved = context.resolve_reference("$o.node_id.field")  # node output
+resolved = context.resolve_reference("$v.key")            # variable
 
 # Check state
-messages = context.message_history
-usage = context.token_usage
+messages = context.get_messages("agent_name")
+usage = context.usage  # Usage dataclass
 ```
 
 ### Event-Driven Streaming
@@ -281,19 +285,19 @@ usage = context.token_usage
 Use AG-UI protocol events for streaming:
 
 ```python
-from agstack.llm.flow.events import EventType
+from agstack.llm.flow import EventType
 
-async for event in agent.stream(context):
-    event_type = event.get("type")
-    
+async for evt in agent.stream(context):
+    event_type = evt.get("type")
+
     if event_type == EventType.TEXT_MESSAGE_CONTENT:
-        print(event.get("delta"), end="")
-    
+        print(evt.get("delta"), end="")
+
     elif event_type == EventType.TOOL_CALL_START:
-        tool_name = event.get("toolCallName")
+        tool_name = evt.get("toolCallName")
         print(f"\n[Calling: {tool_name}]")
-    
-    elif event_type == EventType.AGENT_MESSAGE_COMPLETED:
+
+    elif event_type == EventType.TEXT_MESSAGE_END:
         print("\n[Completed]")
 ```
 
@@ -326,21 +330,22 @@ data = user.model_dump()
 from agstack.llm.flow.exceptions import (
     FlowError,
     ToolExecutionError,
-    AgentError
+    AgentError,
+    NodeExecutionError,
 )
 
 try:
     tool = create_tool("my_tool")
-    result = await tool.run(context)
+    result = await tool.run(context, {"param": "value"})
 except ToolExecutionError as e:
     print(f"Tool error: {e.error_key}")
     print(f"Details: {e.arguments}")
 except RuntimeError as e:
     print(f"Component not found: {e}")
 except AgentError as e:
-    print(f"Agent error: {e}")
+    print(f"Agent error: {e.error_key}")
 except FlowError as e:
-    print(f"Flow error: {e.error_key} at node {e.node_id}")
+    print(f"Flow error: {e.error_key}")
 ```
 
 ## Code Standards
@@ -366,8 +371,8 @@ Always add type hints:
 ```python
 from agstack.llm.flow import FlowContext
 
-async def my_function(context: FlowContext) -> dict[str, str]:
-    result: str = context.get_variable("key")
+async def my_function(context: FlowContext, inputs: dict[str, str]) -> dict[str, str]:
+    result: str = inputs.get("key", "")
     return {"result": result}
 ```
 
@@ -393,7 +398,7 @@ class ChatBot(Agent):
         )
 
 # Multi-turn conversation
-context = FlowContext(session_id="chat_123")
+context = FlowContext()
 
 context.set_variable("query", "What is Python?")
 response1 = await chatbot.run(context)
@@ -405,7 +410,7 @@ response2 = await chatbot.run(context)  # Remembers previous context
 ### Task Automation
 
 ```python
-# Automation workflow
+# Automation workflow with edge-driven routing
 automation_flow = Flow(
     flow_id="automation",
     name="Task Automation",
@@ -415,7 +420,7 @@ automation_flow = Flow(
             "type": "agent",
             "config": {
                 "agent_name": "classifier",
-                "parameters": {"query": "Classify task: {input.task}"}
+                "inputs": {"input": "$v.task"}
             }
         },
         {
@@ -423,12 +428,15 @@ automation_flow = Flow(
             "type": "tool",
             "config": {
                 "tool_name": "task_executor",
-                "parameters": {
-                    "task_type": "{classify@result}",
-                    "task_data": "{input.task}"
+                "inputs": {
+                    "task_type": "$o.classify.result",
+                    "task_data": "$v.task"
                 }
             }
         }
+    ],
+    edges=[
+        {"source": "classify", "target": "execute"}
     ]
 )
 ```
@@ -441,21 +449,13 @@ research_flow = Flow(
     flow_id="research_system",
     name="Multi-Agent Research",
     nodes=[
-        {
-            "id": "research",
-            "type": "agent",
-            "config": {"agent_name": "researcher", ...}
-        },
-        {
-            "id": "analyze",
-            "type": "agent",
-            "config": {"agent_name": "analyst", ...}
-        },
-        {
-            "id": "summarize",
-            "type": "agent",
-            "config": {"agent_name": "writer", ...}
-        }
+        {"id": "research", "type": "agent", "config": {"agent_name": "researcher", "inputs": {"input": "$v.topic"}}},
+        {"id": "analyze", "type": "agent", "config": {"agent_name": "analyst", "inputs": {"input": "$o.research.result"}}},
+        {"id": "summarize", "type": "agent", "config": {"agent_name": "writer", "inputs": {"input": "$o.analyze.result"}}}
+    ],
+    edges=[
+        {"source": "research", "target": "analyze"},
+        {"source": "analyze", "target": "summarize"}
     ]
 )
 ```
@@ -465,10 +465,15 @@ research_flow = Flow(
 ### Basic Setup
 
 ```python
-from agstack.fastapi import create_app
-from fastapi import FastAPI
+from agstack.fastapi import setup_fastapi
+from agstack.llm.flow import FlowContext, create_agent
 
-app: FastAPI = create_app()
+app = setup_fastapi(
+    title="My App",
+    version="1.0.0",
+    debug=True,
+    static_url="/static"
+)
 
 @app.get("/")
 async def root():
@@ -476,33 +481,33 @@ async def root():
 
 @app.post("/chat")
 async def chat(request: ChatRequest):
-    context = FlowContext(session_id=request.session_id)
+    context = FlowContext()
     context.set_variable("query", request.message)
-    
+
     agent = create_agent("chatbot")
     response = await agent.run(context)
-    
-    return {"response": response.content}
+
+    return {"response": response.get("result", "")}
 ```
 
 ### Streaming Endpoints
 
 ```python
 from agstack.fastapi.sse import EventSourceResponse
-from agstack.llm.flow.events import EventType
+from agstack.llm.flow import EventType
 
 @app.post("/chat/stream")
 async def chat_stream(request: ChatRequest):
-    context = FlowContext(session_id=request.session_id)
+    context = FlowContext()
     context.set_variable("query", request.message)
-    
+
     agent = create_agent("chatbot")
-    
+
     async def event_generator():
-        async for event in agent.stream(context):
-            if event.get("type") == EventType.TEXT_MESSAGE_CONTENT:
-                yield {"data": event.get("delta")}
-    
+        async for evt in agent.stream(context):
+            if evt.get("type") == EventType.TEXT_MESSAGE_CONTENT:
+                yield {"data": evt.get("delta")}
+
     return EventSourceResponse(event_generator())
 ```
 
@@ -540,7 +545,7 @@ connection = await get_mq_connection()
 
 ## Configuration
 
-AgStack uses TOML files with environment variable overrides:
+AgStack uses TOML config files with environment variable overrides (via `agstack.config.manager`):
 
 **config.toml**:
 ```toml
@@ -555,31 +560,139 @@ port = 5432
 
 **Environment override**:
 ```bash
-export APP_NAME="production-app"
-export DATABASE_HOST="prod-db.example.com"
+export APP_DATABASE_HOST="prod-db.example.com"
 ```
 
-Load configuration:
-```python
-from agstack.config import get_config
+## Node Types
 
-config = get_config()
-app_name = config.app.name
-db_host = config.database.host
+AgStack supports the following built-in node types for flows:
+
+| Type | Description |
+|------|-------------|
+| `agent` | Multi-turn LLM agent with tool use loop |
+| `tool` | Execute a registered tool |
+| `llm_chat` | Single-turn LLM call (lighter than agent) |
+| `python` | RestrictedPython sandboxed code execution |
+| `switch` | Variable-based routing (zero LLM cost) |
+| `subflow` | Execute another registered/inline flow |
+| `detect` | Detection/classification node |
+| `echo` | Pass-through echo node |
+| `llm_embed` | Embedding generation |
+| `llm_rerank` | Reranking node |
+| `message` | Template text output (flow-level) |
+| `parallel` | Parallel branch execution (flow-level) |
+| `iteration` | Loop over items (flow-level) |
+
+## Advanced Features
+
+### FlowTrace (Structured Execution Trace)
+
+FlowTrace provides a complete execution trace after flow completion:
+
+```python
+from agstack.llm.flow import FlowTrace, NodeTrace, EdgeTrace
+
+context = FlowContext()
+result = await flow.run(context)
+
+# Access trace
+trace: FlowTrace = context.trace
+print(f"Duration: {trace.finished_at - trace.started_at}s")
+print(f"Total usage: {trace.total_usage}")
+
+# Inspect node traces
+for node_trace in trace.nodes:
+    print(f"  {node_trace.node_id}: {node_trace.duration_ms}ms")
+```
+
+### Edge-Driven Routing with Conditions
+
+```python
+flow = Flow(
+    flow_id="conditional",
+    name="Conditional Flow",
+    nodes=[
+        {"id": "classify", "type": "agent", "config": {"agent_name": "classifier", "inputs": {"input": "$v.query"}}},
+        {"id": "handle_urgent", "type": "agent", "config": {"agent_name": "fast_agent", "inputs": {"input": "$v.query"}}},
+        {"id": "handle_normal", "type": "agent", "config": {"agent_name": "standard_agent", "inputs": {"input": "$v.query"}}}
+    ],
+    edges=[
+        {"source": "classify", "target": "handle_urgent", "condition": "$o.classify.result == urgent"},
+        {"source": "classify", "target": "handle_normal"}  # fallback (no condition)
+    ]
+)
+```
+
+### Retry Policy
+
+```python
+{
+    "id": "fragile_step",
+    "type": "tool",
+    "config": {
+        "tool_name": "external_api",
+        "inputs": {"url": "$v.url"},
+        "retry": {
+            "max_retries": 3,
+            "delay": 1.0,
+            "backoff": 2.0
+        }
+    }
+}
+```
+
+### Cycle Limits
+
+Prevent infinite loops in cyclic graphs:
+
+```python
+flow = Flow(
+    flow_id="cyclic",
+    name="Cyclic Flow",
+    nodes=[...],
+    edges=[...],
+    cycle_limits={"refine": 5}  # node "refine" can run at most 5 times
+)
+```
+
+### Custom Node Handlers
+
+```python
+from agstack.llm.flow import NodeHandler, register_node_handler
+
+class MyCustomHandler(NodeHandler):
+    node_type = "my_custom"
+
+    async def execute(self, node: dict, context: FlowContext) -> Any:
+        config = node.get("config", {})
+        resolved = self.resolve_inputs(config, context)
+        # Custom logic here
+        return {"result": "done"}
+
+register_node_handler("my_custom", MyCustomHandler())
+```
+
+### Tool Visibility (label & echo)
+
+Control how tool execution appears to users:
+
+```python
+registry.register_tool("search", WebSearchTool, label="Searching...", echo=True)
+registry.register_agent("analyst", AnalystAgent, label="Analyzing", echo=True)
 ```
 
 ## Best Practices
 
 1. **Component Registration**: Register all components at application startup
-2. **Session Management**: Use unique session_id for each user conversation
+2. **Session Management**: Use unique `flow_id` for each execution context
 3. **Error Handling**: Always wrap execution in try-except blocks
 4. **Type Safety**: Use type hints and BaseSchema for all data models
 5. **Async First**: Use async/await for all I/O operations
 6. **Clear Instructions**: Write specific, detailed agent instructions
 7. **Tool Descriptions**: Write clear tool descriptions for LLM understanding
 8. **Testing**: Test tools and agents independently before integration
-9. **Monitoring**: Track token usage and execution times
-10. **Documentation**: Document expected inputs/outputs for flows
+9. **Monitoring**: Track token usage via `context.usage` and FlowTrace
+10. **Variable References**: Use `$o.node_id.field` for outputs, `$v.key` for variables
 
 ## Troubleshooting
 
@@ -590,44 +703,41 @@ db_host = config.database.host
 agent = create_agent("my_agent")  # RuntimeError if not registered
 
 # Solution: Ensure component is registered
-registry.register_agent("my_agent", lambda: MyAgent())
+registry.register_agent("my_agent", MyAgent)
 ```
 
 ### Tool Execution Fails
 
 ```python
 # Problem: Tool raises ToolExecutionError
-# Solution: Check parameter validation and error handling
+# Solution: Check function signature and error handling
 
-async def tool_function(self, context: FlowContext):
-    try:
-        param = context.get_variable("param")
-        # Validate param
+class MyTool(Tool):
+    def __init__(self):
+        super().__init__(
+            name="my_tool",
+            description="Does something",
+            function=self.execute,
+            parameters={...}
+        )
+
+    async def execute(self, context: FlowContext, inputs: dict):
+        param = inputs.get("param")
         if not param:
             raise ValueError("param is required")
-        # Execute logic
-        return result
-    except ValueError as e:
-        raise ToolExecutionError(
-            error_key="invalid_param",
-            arguments={"error": str(e)}
-        )
+        return {"status": "ok", "data": param}
 ```
 
 ### Flow Variable References
 
 ```python
-# Problem: Variables not resolving in flow
-# Solution: Use correct reference syntax
+# Variable reference syntax:
+# $o.node_id.field     → context.outputs["node_id"]["field"]
+# $v.key               → context.variables["key"]
 
-# Correct
-"parameters": {"data": "{previous_node@result}"}
-
-# Also correct for nested fields
-"parameters": {"name": "{user_lookup@result.user.name}"}
-
-# Incorrect
-"parameters": {"data": "previous_node@result"}  # Missing braces
+# In node config:
+"inputs": {"data": "$o.previous_node.result"}  # output reference
+"inputs": {"name": "$v.user_name"}             # variable reference
 ```
 
 ## Next Steps
@@ -649,5 +759,3 @@ For detailed information on specific topics:
 - **[tools.md](references/tools.md)**: Complete guide to building tools
 - **[flows.md](references/flows.md)**: Complete guide to orchestrating flows
 - **[registry.md](references/registry.md)**: Complete guide to registry pattern and component lifecycle
-
-These references contain comprehensive examples, patterns, and best practices for each component type.
