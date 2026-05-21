@@ -268,7 +268,13 @@ class Agent:
                 result_content = result.content or (
                     json.dumps(result.result) if result.success else json.dumps({"error": result.error})
                 )
-                context.add_message(self.name, "tool", content=result_content, tool_call_id=tool_call["id"])
+                context.add_message(
+                    self.name,
+                    "tool",
+                    content=result_content,
+                    tool_call_id=tool_call["id"],
+                    summary=result.summary,
+                )
 
                 # AG-UI: TOOL_CALL_RESULT
                 yield event.tool_call_result(tool_call_id=tool_call["id"], content=result_content)
