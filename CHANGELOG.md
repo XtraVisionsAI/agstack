@@ -1,3 +1,9 @@
+## 1.20.0 (2026-05-21)
+
+### Feat
+
+- **flow**: persist tool result summary into message context
+
 ## 1.19.0 (2026-05-21)
 
 ### Feat
