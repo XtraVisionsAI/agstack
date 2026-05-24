@@ -1,3 +1,9 @@
+## 1.21.0 (2026-05-24)
+
+### Feat
+
+- **flow**: add skill_progress start/end paired events for tool execution
+
 ## 1.20.0 (2026-05-21)
 
 ### Feat
