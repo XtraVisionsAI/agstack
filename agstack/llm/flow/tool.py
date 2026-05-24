@@ -43,6 +43,7 @@ class Tool:
         category: str | None = None,
         summary_fn: Callable[["ToolResult"], str | None] | None = None,
         result_formatter: Callable[["ToolResult"], str] | None = None,
+        progress_label_fn: Callable[[dict[str, Any]], str] | None = None,
     ):
         """初始化工具
 
@@ -55,6 +56,7 @@ class Tool:
         :param category: 工具分类（retrieval / analysis / action / utility）
         :param summary_fn: 生成面向用户摘要的函数 (ToolResult) -> str | None
         :param result_formatter: 自定义 LLM 内容格式化函数 (ToolResult) -> str
+        :param progress_label_fn: 基于调用参数生成动态进度描述 (args) -> str
         """
         self.name = name
         self.description = description
@@ -65,6 +67,19 @@ class Tool:
         self.category = category
         self.summary_fn = summary_fn
         self.result_formatter = result_formatter
+        self.progress_label_fn = progress_label_fn
+
+    def get_progress_label(self, args: dict[str, Any]) -> str | None:
+        """基于调用参数生成面向用户的动态进度描述
+
+        返回 None 时不发送进度事件。
+        """
+        if self.progress_label_fn:
+            try:
+                return self.progress_label_fn(args)
+            except Exception:
+                pass
+        return self.label
 
     async def execute_async(self, context: "FlowContext", inputs: dict[str, Any] | None = None) -> ToolResult:
         """异步执行工具（包含计时、摘要生成、结果格式化、可观测性记录）"""

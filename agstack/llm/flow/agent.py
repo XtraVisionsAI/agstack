@@ -261,8 +261,30 @@ class Agent:
                 except json.JSONDecodeError:
                     tool_args = {}
 
+                # 执行前进度事件
+                progress_label = tool.get_progress_label(tool_args)
+                if progress_label:
+                    yield event.custom(
+                        name="skill_progress",
+                        value={
+                            "progressId": tool_call["id"],
+                            "description": progress_label,
+                            "status": "running",
+                        },
+                    )
+
                 # 执行工具（传入 LLM 解析的参数作为 inputs）
                 result = await tool.execute_async(context, tool_args)
+
+                # 执行后进度事件
+                if progress_label:
+                    yield event.custom(
+                        name="skill_progress",
+                        value={
+                            "progressId": tool_call["id"],
+                            "status": "completed" if result.success else "failed",
+                        },
+                    )
 
                 # 使用 result.content 作为 LLM 上下文（Tool 已计算好）
                 result_content = result.content or (
