@@ -93,9 +93,17 @@ class Tool:
             try:
                 result.content = self.result_formatter(result)
             except Exception:
-                result.content = json.dumps(result.result) if result.success else json.dumps({"error": result.error})
+                result.content = (
+                    json.dumps(result.result, ensure_ascii=False)
+                    if result.success
+                    else json.dumps({"error": result.error}, ensure_ascii=False)
+                )
         else:
-            result.content = json.dumps(result.result) if result.success else json.dumps({"error": result.error})
+            result.content = (
+                json.dumps(result.result, ensure_ascii=False)
+                if result.success
+                else json.dumps({"error": result.error}, ensure_ascii=False)
+            )
 
         # 生成面向用户的摘要
         if self.summary_fn:

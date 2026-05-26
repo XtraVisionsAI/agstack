@@ -245,13 +245,13 @@ class Agent:
                     context.add_message(
                         self.name,
                         "tool",
-                        content=json.dumps({"error": error_msg}),
+                        content=json.dumps({"error": error_msg}, ensure_ascii=False),
                         tool_call_id=tool_call["id"],
                     )
                     # AG-UI: TOOL_CALL_RESULT (错误)
                     yield event.tool_call_result(
                         tool_call_id=tool_call["id"],
-                        content=json.dumps({"error": error_msg}),
+                        content=json.dumps({"error": error_msg}, ensure_ascii=False),
                     )
                     continue
 
@@ -288,7 +288,9 @@ class Agent:
 
                 # 使用 result.content 作为 LLM 上下文（Tool 已计算好）
                 result_content = result.content or (
-                    json.dumps(result.result) if result.success else json.dumps({"error": result.error})
+                    json.dumps(result.result, ensure_ascii=False)
+                    if result.success
+                    else json.dumps({"error": result.error}, ensure_ascii=False)
                 )
                 context.add_message(
                     self.name,
