@@ -1,3 +1,9 @@
+## 1.21.1 (2026-05-26)
+
+### Fix
+
+- **flow**: use ensure_ascii=False in json.dumps to preserve unicode output
+
 ## 1.21.0 (2026-05-24)
 
 ### Feat
