@@ -10,14 +10,42 @@ from .logger import setup_logger
 from .types import AppConfig
 
 
+_CONFIG_CANDIDATES = ("config.toml", "config.yaml", "config.yml")
+
+
+def _find_config_file(approot: Path) -> Path:
+    """按优先级查找配置文件"""
+    for name in _CONFIG_CANDIDATES:
+        path = approot / name
+        if path.exists():
+            return path
+    return approot / "config.toml"
+
+
 def _load_config_file(config_path: Path) -> dict[str, Any]:
-    """加载配置文件（容错处理）"""
+    """加载配置文件（支持 TOML 和 YAML 格式）"""
     if not config_path.exists():
         return {}
 
+    suffix = config_path.suffix.lower()
     try:
-        with open(config_path, "rb") as f:
-            return tomllib.load(f)
+        if suffix == ".toml":
+            with open(config_path, "rb") as f:
+                return tomllib.load(f)
+        elif suffix in (".yaml", ".yml"):
+            try:
+                import yaml
+            except ImportError as err:
+                raise ImportError(
+                    f"PyYAML is required to load {config_path}. Install it with: pip install agstack[yaml]"
+                ) from err
+            with open(config_path) as f:
+                return yaml.safe_load(f) or {}
+        else:
+            print(f"Unsupported config format: {suffix}")
+            return {}
+    except ImportError:
+        raise
     except Exception:  # noqa
         print(f"Failed to load config file: {config_path}")
         return {}
@@ -95,37 +123,45 @@ def _determine_log_level(config_data: dict[str, Any]) -> str:
     return config_data.get("logger", {}).get("level", "INFO")
 
 
-def setup_config(appname: str, envprefix: str = "APP") -> AppConfig:
+def setup_config(appname: str, envprefix: str = "APP", config_file: str | Path | None = None) -> AppConfig:
     """初始化配置
 
     Args:
         appname: 应用名称
         envprefix: 环境变量前缀
+        config_file: 配置文件路径（支持 .toml / .yaml / .yml），为 None 时自动查找
 
     Returns:
         AppConfig: 配置实例
     """
     approot = Path.cwd()
-    config_path = approot / "config.toml"
 
-    # 1. 加载配置文件（容错）
+    # 1. 确定配置文件路径
+    if config_file:
+        config_path = Path(config_file)
+        if not config_path.is_absolute():
+            config_path = approot / config_path
+    else:
+        config_path = _find_config_file(approot)
+
+    # 2. 加载配置文件（容错）
     config_data = _load_config_file(config_path)
 
-    # 2. 加载环境变量覆盖
+    # 3. 加载环境变量覆盖
     env_overrides = _load_env_overrides(envprefix)
     config_data.update(env_overrides)
 
-    # 3. 设置应用信息
+    # 4. 设置应用信息
     config_data.update({"appname": appname, "approot": approot})
 
-    # 4. 确定日志级别（优先级处理）
+    # 5. 确定日志级别（优先级处理）
     log_level = _determine_log_level(config_data)
     config_data.setdefault("logger", {})["level"] = log_level
 
-    # 5. 初始化日志（使用字典配置）
+    # 6. 初始化日志（使用字典配置）
     setup_logger(appname, **config_data["logger"])
 
-    # 8. 创建配置实例（最后验证）
+    # 7. 创建配置实例（最后验证）
     config = AppConfig.model_validate(config_data)
 
     return config
