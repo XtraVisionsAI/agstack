@@ -4,7 +4,7 @@ requires-python = ">=3.12"
 
 [[package]]
 name = "agstack"
-version = "1.22.0"
+version = "1.22.1"
 source = { virtual = "." }
 dependencies = [
     { name = "bcrypt" },
@@ -53,6 +53,9 @@ std = [
     { name = "aio-pika" },
     { name = "asyncpg" },
 ]
+yaml = [
+    { name = "pyyaml" },
+]
 
 [package.dev-dependencies]
 dev = [
@@ -84,6 +87,7 @@ requires-dist = [
     { name = "pycasbin", specifier = ">=2.8.0" },
     { name = "pydantic", specifier = ">=2.13.3" },
     { name = "python-multipart", specifier = ">=0.0.26" },
+    { name = "pyyaml", marker = "extra == 'yaml'", specifier = ">=6.0" },
     { name = "redis", marker = "extra == 'redis'", specifier = ">=5.0" },
     { name = "requests", specifier = ">=2.32.5" },
     { name = "restrictedpython", specifier = ">=7.0" },
@@ -91,7 +95,7 @@ requires-dist = [
     { name = "tiktoken", specifier = ">=0.12.0" },
     { name = "uvicorn", specifier = ">=0.46.0" },
 ]
-provides-extras = ["mq", "db", "es", "graph", "redis", "std", "pro", "ent"]
+provides-extras = ["mq", "db", "es", "graph", "redis", "yaml", "std", "pro", "ent"]
 
 [package.metadata.requires-dev]
 dev = [

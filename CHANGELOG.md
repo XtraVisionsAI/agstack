@@ -1,3 +1,9 @@
+## 1.22.1 (2026-05-27)
+
+### Fix
+
+- **flow**: add stepId to STEP_STARTED/STEP_FINISHED events for instance-level pairing
+
 ## 1.22.0 (2026-05-27)
 
 ### Feat
