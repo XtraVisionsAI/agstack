@@ -3,6 +3,7 @@
 """NodeHandler 基类 — 所有执行类节点的公共接口"""
 
 from typing import TYPE_CHECKING, Any, AsyncIterator
+from uuid import uuid4
 
 from .. import event
 
@@ -45,7 +46,8 @@ class NodeHandler:
         需要流式输出的节点（如 agent, llm_chat）应覆盖此方法。
         """
         step_name = self.get_step_name(node, node_id)
-        yield event.step_started(step_name=step_name)
+        sid = str(uuid4())
+        yield event.step_started(step_name=step_name, step_id=sid)
         result = await self.execute(node, context)
         context.set_output(node_id, result)
-        yield event.step_finished(step_name=step_name)
+        yield event.step_finished(step_name=step_name, step_id=sid)

@@ -370,7 +370,8 @@ class Flow:
     async def stream(self, context: "FlowContext") -> AsyncIterator[dict[str, Any]]:
         """流式执行 Flow（输出 AG-UI 标准事件）"""
         context.trace.started_at = time.time()
-        yield event.step_started(step_name=f"flow:{self.name}")
+        flow_sid = str(uuid4())
+        yield event.step_started(step_name=f"flow:{self.name}", step_id=flow_sid)
 
         try:
             if not self.edges:
@@ -386,7 +387,7 @@ class Flow:
             context.trace.finished_at = time.time()
             context.trace.total_usage = context.usage
 
-        yield event.step_finished(step_name=f"flow:{self.name}")
+        yield event.step_finished(step_name=f"flow:{self.name}", step_id=flow_sid)
 
     async def _stream_sequential(self, context: "FlowContext") -> AsyncIterator[dict[str, Any]]:
         """顺序流式执行"""
@@ -437,7 +438,8 @@ class Flow:
                 context.trace.record_node_start(current_node_id, "message", inputs=msg_config)
 
                 # message 节点增加 STEP 事件
-                step_evt = event.step_started(step_name=f"message:{current_node_id}")
+                msg_sid = str(uuid4())
+                step_evt = event.step_started(step_name=f"message:{current_node_id}", step_id=msg_sid)
                 step_evt["_node_id"] = current_node_id
                 step_evt["_label"] = msg_config.get("label")
                 step_evt["_echo"] = msg_config.get("echo", True)
@@ -454,7 +456,7 @@ class Flow:
                 text = template.format_map(_SafeFormatDict(context.variables))
                 context.set_output(current_node_id, {"result": text})
 
-                fin_evt = event.step_finished(step_name=f"message:{current_node_id}")
+                fin_evt = event.step_finished(step_name=f"message:{current_node_id}", step_id=msg_sid)
                 fin_evt["_node_id"] = current_node_id
                 fin_evt["_label"] = msg_config.get("label")
                 fin_evt["_echo"] = msg_config.get("echo", True)
@@ -469,7 +471,8 @@ class Flow:
 
                 context.trace.record_node_start(current_node_id, "parallel", inputs=config)
 
-                step_evt = event.step_started(step_name=f"parallel:{current_node_id}")
+                parallel_sid = str(uuid4())
+                step_evt = event.step_started(step_name=f"parallel:{current_node_id}", step_id=parallel_sid)
                 step_evt["_node_id"] = current_node_id
                 step_evt["_label"] = None
                 step_evt["_echo"] = False
@@ -510,7 +513,7 @@ class Flow:
                         merged.update(branch_result)
                 context.set_output(current_node_id, merged)
 
-                fin_evt = event.step_finished(step_name=f"parallel:{current_node_id}")
+                fin_evt = event.step_finished(step_name=f"parallel:{current_node_id}", step_id=parallel_sid)
                 fin_evt["_node_id"] = current_node_id
                 fin_evt["_label"] = None
                 fin_evt["_echo"] = False
@@ -533,7 +536,8 @@ class Flow:
 
                 context.trace.record_node_start(current_node_id, "iteration", inputs=config)
 
-                step_evt = event.step_started(step_name=f"iteration:{current_node_id}")
+                iter_sid = str(uuid4())
+                step_evt = event.step_started(step_name=f"iteration:{current_node_id}", step_id=iter_sid)
                 step_evt["_node_id"] = current_node_id
                 step_evt["_label"] = None
                 step_evt["_echo"] = False
@@ -574,7 +578,7 @@ class Flow:
                 iteration_output = {"results": results}
                 context.set_output(current_node_id, iteration_output)
 
-                fin_evt = event.step_finished(step_name=f"iteration:{current_node_id}")
+                fin_evt = event.step_finished(step_name=f"iteration:{current_node_id}", step_id=iter_sid)
                 fin_evt["_node_id"] = current_node_id
                 fin_evt["_label"] = None
                 fin_evt["_echo"] = False

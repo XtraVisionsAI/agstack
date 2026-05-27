@@ -92,15 +92,17 @@ class LLMChatNodeHandler(NodeHandler):
         if not use_stream:
             # 非流式：走默认 execute 路径
             step_name = self.get_step_name(node, node_id)
-            yield event.step_started(step_name=step_name)
+            sid = str(uuid4())
+            yield event.step_started(step_name=step_name, step_id=sid)
             result = await self.execute(node, context)
             context.set_output(node_id, result)
-            yield event.step_finished(step_name=step_name)
+            yield event.step_finished(step_name=step_name, step_id=sid)
             return
 
         # 流式输出
         step_name = self.get_step_name(node, node_id)
-        yield event.step_started(step_name=step_name)
+        sid = str(uuid4())
+        yield event.step_started(step_name=step_name, step_id=sid)
 
         resolved_inputs = self.resolve_inputs(config, context)
         prompt_text = self._build_prompt(config.get("prompt", ""), resolved_inputs)
@@ -153,4 +155,4 @@ class LLMChatNodeHandler(NodeHandler):
         result_text = "".join(content_parts)
         context.set_output(node_id, {"result": result_text})
 
-        yield event.step_finished(step_name=step_name)
+        yield event.step_finished(step_name=step_name, step_id=sid)

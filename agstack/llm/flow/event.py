@@ -97,12 +97,12 @@ def run_error(*, message: str, code: str | None = None) -> dict[str, Any]:
 # ── Step ──
 
 
-def step_started(*, step_name: str) -> dict[str, Any]:
-    return _ev(EventType.STEP_STARTED, step_name=step_name)
+def step_started(*, step_name: str, step_id: str | None = None) -> dict[str, Any]:
+    return _ev(EventType.STEP_STARTED, step_name=step_name, step_id=step_id or str(uuid4()))
 
 
-def step_finished(*, step_name: str) -> dict[str, Any]:
-    return _ev(EventType.STEP_FINISHED, step_name=step_name)
+def step_finished(*, step_name: str, step_id: str) -> dict[str, Any]:
+    return _ev(EventType.STEP_FINISHED, step_name=step_name, step_id=step_id)
 
 
 # ── State ──

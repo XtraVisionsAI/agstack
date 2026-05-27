@@ -3,6 +3,7 @@
 """Agent 节点处理器 — 从 flow.py 提取"""
 
 from typing import TYPE_CHECKING, Any, AsyncIterator
+from uuid import uuid4
 
 from .. import event
 from ..exceptions import FlowError
@@ -46,8 +47,9 @@ class AgentNodeHandler(NodeHandler):
     async def stream(self, node: dict, context: "FlowContext", node_id: str) -> AsyncIterator[dict[str, Any]]:
         config = node.get("config", {})
         step_name = self.get_step_name(node, node_id)
+        sid = str(uuid4())
 
-        yield event.step_started(step_name=step_name)
+        yield event.step_started(step_name=step_name, step_id=sid)
         resolved = self.resolve_inputs(config, context)
         ag = self._create_agent(config, context)
         async for evt in ag.stream(context, inputs=resolved):
@@ -63,4 +65,4 @@ class AgentNodeHandler(NodeHandler):
         tool_calls = context.pop_execution_records()
         context.set_variable("_last_node_tool_calls", tool_calls)
 
-        yield event.step_finished(step_name=step_name)
+        yield event.step_finished(step_name=step_name, step_id=sid)

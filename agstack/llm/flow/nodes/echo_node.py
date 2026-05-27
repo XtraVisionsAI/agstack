@@ -32,8 +32,9 @@ class EchoNodeHandler(NodeHandler):
     async def stream(self, node: dict, context: "FlowContext", node_id: str) -> AsyncIterator[dict[str, Any]]:
         config = node.get("config", {})
         step_name = self.get_step_name(node, node_id)
+        sid = str(uuid4())
 
-        yield event.step_started(step_name=step_name)
+        yield event.step_started(step_name=step_name, step_id=sid)
 
         resolved = self.resolve_inputs(config, context)
         content = resolved.get("content", "")
@@ -51,4 +52,4 @@ class EchoNodeHandler(NodeHandler):
             yield event.text_message_end(message_id=msg_id)
 
         context.set_output(node_id, {"result": content})
-        yield event.step_finished(step_name=step_name)
+        yield event.step_finished(step_name=step_name, step_id=sid)
