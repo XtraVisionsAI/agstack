@@ -1,3 +1,9 @@
+## 1.22.0 (2026-05-27)
+
+### Feat
+
+- **config**: add optional YAML config file support
+
 ## 1.21.1 (2026-05-26)
 
 ### Fix
