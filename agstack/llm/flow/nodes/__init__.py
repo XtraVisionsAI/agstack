@@ -6,6 +6,7 @@ from .agent_node import AgentNodeHandler
 from .base import NodeHandler
 from .detect_node import DetectNodeHandler
 from .echo_node import EchoNodeHandler
+from .iterator_node import IteratorNodeHandler
 from .llm_chat_node import LLMChatNodeHandler
 from .llm_embed_node import LLMEmbedNodeHandler
 from .llm_rerank_node import LLMRerankNodeHandler
@@ -27,6 +28,7 @@ builtin_handlers: list[NodeHandler] = [
     EchoNodeHandler(),
     SwitchNodeHandler(),
     SubflowNodeHandler(),
+    IteratorNodeHandler(),
 ]
 
 __all__ = [

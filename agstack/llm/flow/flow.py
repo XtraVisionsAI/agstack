@@ -358,8 +358,19 @@ class Flow:
 
                 elif node_type in self._node_handlers:
                     handler = self._node_handlers[node_type]
-                    result = await handler.execute(node, context)
+                    try:
+                        result = await handler.execute(node, context)
+                    except Exception as e:
+                        iter_target = self._find_iterator_fallback(current_node_id)
+                        if iter_target:
+                            context.set_variable(f"_iter_{iter_target}_error", str(e))
+                            context.set_output(current_node_id, {"error": str(e)})
+                            context.set_variable("_prev_node_id", current_node_id)
+                            current_node_id = iter_target
+                            continue
+                        raise
                     context.set_output(current_node_id, result)
+                    context.set_variable("_prev_node_id", current_node_id)
                     current_node_id = self._resolve_next_node(current_node_id, context)
 
                 else:
@@ -408,6 +419,18 @@ class Flow:
                     code="UNKNOWN_NODE_TYPE",
                 )
                 raise NodeExecutionError("UNKNOWN_NODE_TYPE", args={"node_type": node_type})
+
+    def _find_iterator_fallback(self, source_id: str) -> str | None:
+        """查找从 source_id 出发指向 iterator 节点的 edge target"""
+        for edge in self.edges:
+            if edge.get("source") == source_id:
+                target_id: str | None = edge.get("target")
+                if not target_id:
+                    continue
+                target_node = self.get_node_config(target_id)
+                if target_node and target_node.get("type") == "iterator":
+                    return target_id
+        return None
 
     async def _stream_edge_driven(self, context: "FlowContext") -> AsyncIterator[dict[str, Any]]:
         """边驱动流式执行"""
@@ -478,9 +501,9 @@ class Flow:
                 step_evt["_echo"] = False
                 yield step_evt
 
-                parallel_qid = context.trace._qualify_id(current_node_id)
+                _pqid: str = context.trace._qualify_id(current_node_id)
 
-                async def _exec_branch(branch_id: str, _parent_qid: str = parallel_qid) -> None:
+                async def _exec_branch(branch_id: str, parent_qid: str) -> None:
                     branch_node = self.get_node_config(branch_id)
                     if not branch_node:
                         return
@@ -494,7 +517,7 @@ class Flow:
                         branch_id,
                         branch_type,
                         inputs=branch_config.get("inputs", {}),
-                        parent_id=_parent_qid,
+                        parent_id=parent_qid,
                     )
                     context.current_node = branch_id
                     try:
@@ -505,7 +528,7 @@ class Flow:
                         context.trace.record_node_end(branch_id, error=str(e))
                         raise
 
-                await asyncio.gather(*[_exec_branch(bid) for bid in branches])
+                await asyncio.gather(*[_exec_branch(bid, _pqid) for bid in branches])
                 merged: dict[str, Any] = {}
                 for bid in branches:
                     branch_result = context.outputs.get(bid, {})
@@ -600,8 +623,20 @@ class Flow:
                     label=config.get("label"),
                 )
 
-                async for evt in self._execute_node_with_retry(node, context, current_node_id):
-                    yield evt
+                try:
+                    async for evt in self._execute_node_with_retry(node, context, current_node_id):
+                        yield evt
+                except (NodeExecutionError, Exception) as e:
+                    # 迭代体错误容忍：如果该节点有 edge 指向 iterator，路由回去而非中断 flow
+                    iter_target = self._find_iterator_fallback(current_node_id)
+                    if iter_target:
+                        context.set_variable(f"_iter_{iter_target}_error", str(e))
+                        context.set_output(current_node_id, {"error": str(e)})
+                        context.trace.record_node_end(current_node_id, error=str(e))
+                        context.set_variable("_prev_node_id", current_node_id)
+                        current_node_id = iter_target
+                        continue
+                    raise
 
                 # 收集 agent 节点存放的 tool_calls 或通用 execution_records
                 tool_calls = context.get_variable("_last_node_tool_calls")
@@ -622,6 +657,7 @@ class Flow:
                     tool_calls=tool_calls if tool_calls else None,
                     messages=messages,
                 )
+                context.set_variable("_prev_node_id", current_node_id)
                 current_node_id = self._resolve_next_node(current_node_id, context)
 
             else:
