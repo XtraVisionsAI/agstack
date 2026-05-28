@@ -1,3 +1,9 @@
+## 1.23.0 (2026-05-28)
+
+### Feat
+
+- **flow**: add iterator node type for edge-driven array traversal
+
 ## 1.22.1 (2026-05-27)
 
 ### Fix
