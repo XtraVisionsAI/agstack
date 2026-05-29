@@ -1,3 +1,9 @@
+## 1.24.0 (2026-05-29)
+
+### Feat
+
+- **flow**: add output_mode append, iterator state cleanup, and $items interpolation
+
 ## 1.23.0 (2026-05-28)
 
 ### Feat
