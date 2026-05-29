@@ -14,11 +14,11 @@ if TYPE_CHECKING:
 
 
 class IteratorNodeHandler(NodeHandler):
-    """Iterator 节点：管理数组遍历状态，暴露当前元素供下游引用，收集每轮结果。
+    """Iterator 节点：管理数组遍历状态，暴露当前元素供下游引用。
 
     通过 edge-driven 执行被多次访问：
     - 首次访问：初始化迭代，暴露第一个元素，走迭代体 edge
-    - Cycle-back：收集上一轮结果，推进 index，继续或走 completion edge
+    - Cycle-back：推进 index，继续或走 completion edge
     """
 
     node_type = "iterator"
@@ -33,7 +33,6 @@ class IteratorNodeHandler(NodeHandler):
         return items
 
     def _set_item_output(self, node_id: str, state: dict, config: dict, context: "FlowContext") -> None:
-        collect_to = config.get("collect_to", "results")
         idx = state["index"]
         context.set_output(
             node_id,
@@ -42,18 +41,15 @@ class IteratorNodeHandler(NodeHandler):
                 "index": idx,
                 "count": len(state["items"]),
                 "done": False,
-                collect_to: list(state["collected"]),
             },
         )
 
     def _set_done_output(self, node_id: str, state: dict, config: dict, context: "FlowContext") -> None:
-        collect_to = config.get("collect_to", "results")
         context.set_output(
             node_id,
             {
                 "done": True,
                 "count": len(state["items"]),
-                collect_to: list(state["collected"]),
             },
         )
 
@@ -74,6 +70,8 @@ class IteratorNodeHandler(NodeHandler):
 
     def _interpolate_event_value(self, template: Any, state: dict, *, error: str | None = None) -> Any:
         if isinstance(template, str):
+            if template == "$items":
+                return state["items"]
             if template == "$index":
                 return state["index"]
             if template == "$item":
@@ -92,8 +90,7 @@ class IteratorNodeHandler(NodeHandler):
     async def execute(self, node: dict, context: "FlowContext") -> Any:
         config = node.get("config", {})
         items = self._resolve_items(config, context)
-        collect_to = config.get("collect_to", "results")
-        return {"done": True, "count": len(items), collect_to: [], "current_item": None, "index": 0}
+        return {"done": True, "count": len(items), "current_item": None, "index": 0}
 
     async def stream(self, node: dict, context: "FlowContext", node_id: str) -> AsyncIterator[dict[str, Any]]:
         config = node.get("config", {})
@@ -103,9 +100,9 @@ class IteratorNodeHandler(NodeHandler):
         state = context.get_variable(state_key)
 
         if state is None:
-            # ═══ 首次访问：初始化 ═══
+            # ═══ 首次访问（或 re-entry 后重新初始化）═══
             items = self._resolve_items(config, context)
-            state = {"items": items, "index": 0, "collected": []}
+            state = {"items": items, "index": 0}
             context.set_variable(state_key, state)
 
             sid = str(uuid4())
@@ -128,27 +125,18 @@ class IteratorNodeHandler(NodeHandler):
             yield event.step_finished(step_name=step_name, step_id=sid)
 
         else:
-            # ═══ Cycle-back：收集 + 推进 ═══
+            # ═══ Cycle-back：推进 index ═══
             sid = str(uuid4())
             yield event.step_started(step_name=step_name, step_id=sid)
 
-            prev_node_id = context.get_variable("_prev_node_id")
             error = context.get_variable(f"_iter_{node_id}_error")
 
             if error:
-                state["collected"].append(
-                    {
-                        "error": error,
-                        "item": state["items"][state["index"]] if state["index"] < len(state["items"]) else None,
-                    }
-                )
                 evt = self._build_event(config, "on_item_error", state, error=error)
                 if evt:
                     yield evt
                 context.set_variable(f"_iter_{node_id}_error", None)
             else:
-                prev_output = context.outputs.get(prev_node_id) if prev_node_id else None
-                state["collected"].append(prev_output)
                 evt = self._build_event(config, "on_item_end", state)
                 if evt:
                     yield evt

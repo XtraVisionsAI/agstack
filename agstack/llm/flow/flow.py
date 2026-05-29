@@ -623,6 +623,13 @@ class Flow:
                     label=config.get("label"),
                 )
 
+                # output_mode: "append" — 保存执行前的历史
+                append_mode = config.get("output_mode") == "append"
+                _history: list[Any] = []
+                if append_mode:
+                    _prev_output = context.outputs.get(current_node_id)
+                    _history = list(_prev_output) if isinstance(_prev_output, list) else []
+
                 try:
                     async for evt in self._execute_node_with_retry(node, context, current_node_id):
                         yield evt
@@ -637,6 +644,11 @@ class Flow:
                         current_node_id = iter_target
                         continue
                     raise
+
+                # output_mode: "append" — 合并新输出到历史数组
+                if append_mode:
+                    _history.append(context.outputs.get(current_node_id))
+                    context.outputs[current_node_id] = _history
 
                 # 收集 agent 节点存放的 tool_calls 或通用 execution_records
                 tool_calls = context.get_variable("_last_node_tool_calls")
@@ -657,6 +669,14 @@ class Flow:
                     tool_calls=tool_calls if tool_calls else None,
                     messages=messages,
                 )
+
+                # Iterator state cleanup: done 后清理 state 以支持 external re-entry
+                if node_type == "iterator":
+                    _iter_out = context.outputs.get(current_node_id, {})
+                    if isinstance(_iter_out, dict) and _iter_out.get("done"):
+                        if not config.get("preserve_state", False):
+                            context.set_variable(f"_iter_{current_node_id}", None)
+
                 context.set_variable("_prev_node_id", current_node_id)
                 current_node_id = self._resolve_next_node(current_node_id, context)
 

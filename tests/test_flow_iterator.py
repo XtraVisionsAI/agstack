@@ -81,23 +81,21 @@ class TestIteratorNodeHandler:
 
     def test_set_item_output(self):
         ctx = FlowContext()
-        state = {"items": ["a", "b", "c"], "index": 1, "collected": ["prev"]}
-        self.handler._set_item_output("loop", state, {"collect_to": "results"}, ctx)
+        state = {"items": ["a", "b", "c"], "index": 1}
+        self.handler._set_item_output("loop", state, {}, ctx)
         output = ctx.outputs["loop"]
         assert output["current_item"] == "b"
         assert output["index"] == 1
         assert output["count"] == 3
         assert output["done"] is False
-        assert output["results"] == ["prev"]
 
     def test_set_done_output(self):
         ctx = FlowContext()
-        state = {"items": ["a", "b"], "index": 2, "collected": ["r1", "r2"]}
-        self.handler._set_done_output("loop", state, {"collect_to": "results"}, ctx)
+        state = {"items": ["a", "b"], "index": 2}
+        self.handler._set_done_output("loop", state, {}, ctx)
         output = ctx.outputs["loop"]
         assert output["done"] is True
         assert output["count"] == 2
-        assert output["results"] == ["r1", "r2"]
 
     def test_build_event_with_interpolation(self):
         config = {
@@ -108,7 +106,7 @@ class TestIteratorNodeHandler:
                 }
             }
         }
-        state = {"items": ["x", "y", "z"], "index": 0, "collected": []}
+        state = {"items": ["x", "y", "z"], "index": 0}
         evt = self.handler._build_event(config, "on_start", state)
         assert evt is not None
         assert evt["type"] == "CUSTOM"
@@ -117,7 +115,7 @@ class TestIteratorNodeHandler:
         assert evt["value"]["first"] == "x"
 
     def test_build_event_missing_config_returns_none(self):
-        evt = self.handler._build_event({}, "on_start", {"items": [], "index": 0, "collected": []})
+        evt = self.handler._build_event({}, "on_start", {"items": [], "index": 0})
         assert evt is None
 
     def test_execute_returns_done(self):
@@ -136,7 +134,7 @@ class TestIteratorFlowIntegration:
     """iterator 节点 + edge-driven flow 集成测试"""
 
     def test_basic_iteration(self):
-        """遍历 3 个 items，每轮调用 echo tool，收集结果"""
+        """遍历 3 个 items，每轮调用 echo tool，通过 output_mode=append 收集结果"""
         flow = Flow(
             flow_id="test",
             name="iter_test",
@@ -144,10 +142,7 @@ class TestIteratorFlowIntegration:
                 {
                     "id": "loop",
                     "type": "iterator",
-                    "config": {
-                        "items": "$v.tasks",
-                        "collect_to": "results",
-                    },
+                    "config": {"items": "$v.tasks"},
                 },
                 {
                     "id": "do_work",
@@ -155,6 +150,7 @@ class TestIteratorFlowIntegration:
                     "config": {
                         "tool_name": "test_echo",
                         "inputs": {"query": "$o.loop.current_item"},
+                        "output_mode": "append",
                     },
                 },
                 {
@@ -178,10 +174,12 @@ class TestIteratorFlowIntegration:
         loop_output = ctx.outputs["loop"]
         assert loop_output["done"] is True
         assert loop_output["count"] == 3
-        assert len(loop_output["results"]) == 3
 
-        # 验证每轮结果是 echo tool 的输出
-        for i, result in enumerate(loop_output["results"]):
+        # 验证每轮结果通过 append 累积
+        work_output = ctx.outputs["do_work"]
+        assert isinstance(work_output, list)
+        assert len(work_output) == 3
+        for i, result in enumerate(work_output):
             assert result == {"echo": {"query": f"task_{chr(ord('a') + i)}"}}
 
     def test_empty_items_goes_to_completion(self):
@@ -193,7 +191,7 @@ class TestIteratorFlowIntegration:
                 {
                     "id": "loop",
                     "type": "iterator",
-                    "config": {"items": "$v.tasks", "collect_to": "results"},
+                    "config": {"items": "$v.tasks"},
                 },
                 {"id": "body", "type": "tool", "config": {"tool_name": "test_echo", "inputs": {}}},
                 {
@@ -213,7 +211,7 @@ class TestIteratorFlowIntegration:
 
         loop_output = ctx.outputs["loop"]
         assert loop_output["done"] is True
-        assert loop_output["results"] == []
+        assert loop_output["count"] == 0
         # end 节点应该被执行
         assert "end" in ctx.outputs
 
@@ -228,14 +226,17 @@ class TestIteratorFlowIntegration:
                     "type": "iterator",
                     "config": {
                         "items": "$v.tasks",
-                        "collect_to": "results",
                         "max_iterations": 2,
                     },
                 },
                 {
                     "id": "body",
                     "type": "tool",
-                    "config": {"tool_name": "test_echo", "inputs": {"x": "$o.loop.current_item"}},
+                    "config": {
+                        "tool_name": "test_echo",
+                        "inputs": {"x": "$o.loop.current_item"},
+                        "output_mode": "append",
+                    },
                 },
                 {
                     "id": "end",
@@ -254,10 +255,10 @@ class TestIteratorFlowIntegration:
 
         loop_output = ctx.outputs["loop"]
         assert loop_output["done"] is True
-        assert len(loop_output["results"]) == 2
+        assert len(ctx.outputs["body"]) == 2
 
     def test_error_tolerance(self):
-        """单项失败不中断循环，记录 error 后继续"""
+        """单项失败不中断循环，继续下一项"""
         flow = Flow(
             flow_id="test",
             name="iter_error",
@@ -265,7 +266,7 @@ class TestIteratorFlowIntegration:
                 {
                     "id": "loop",
                     "type": "iterator",
-                    "config": {"items": "$v.tasks", "collect_to": "results"},
+                    "config": {"items": "$v.tasks"},
                 },
                 {
                     "id": "body",
@@ -289,10 +290,7 @@ class TestIteratorFlowIntegration:
 
         loop_output = ctx.outputs["loop"]
         assert loop_output["done"] is True
-        assert len(loop_output["results"]) == 2
-        # 每个结果都应该包含 error
-        for result in loop_output["results"]:
-            assert "error" in result
+        assert loop_output["count"] == 2
 
     def test_custom_events_emitted(self):
         """验证 CUSTOM 事件发射"""
@@ -305,7 +303,6 @@ class TestIteratorFlowIntegration:
                     "type": "iterator",
                     "config": {
                         "items": "$v.tasks",
-                        "collect_to": "results",
                         "events": {
                             "on_start": {"name": "loop_started", "value": {"total": "$count"}},
                             "on_item_start": {"name": "item_begin", "value": {"idx": "$index"}},
@@ -366,7 +363,7 @@ class TestIteratorFlowIntegration:
                 {
                     "id": "loop",
                     "type": "iterator",
-                    "config": {"items": "$v.tasks", "collect_to": "results"},
+                    "config": {"items": "$v.tasks"},
                 },
                 {
                     "id": "route",
@@ -382,6 +379,7 @@ class TestIteratorFlowIntegration:
                     "config": {
                         "tool_name": "test_upper",
                         "inputs": {"text": "$o.loop.current_item.text"},
+                        "output_mode": "append",
                     },
                 },
                 {
@@ -390,6 +388,7 @@ class TestIteratorFlowIntegration:
                     "config": {
                         "tool_name": "test_lower",
                         "inputs": {"text": "$o.loop.current_item.text"},
+                        "output_mode": "append",
                     },
                 },
                 {
@@ -420,11 +419,280 @@ class TestIteratorFlowIntegration:
 
         loop_output = ctx.outputs["loop"]
         assert loop_output["done"] is True
-        assert loop_output["results"] == [
-            {"result": "HELLO"},
-            {"result": "world"},
-            {"result": "FOO"},
-        ]
+        assert ctx.outputs["do_upper"] == [{"result": "HELLO"}, {"result": "FOO"}]
+        assert ctx.outputs["do_lower"] == [{"result": "world"}]
+
+
+# ── output_mode / state cleanup / re-entry 测试 ──
+
+
+class TestOutputModeAppend:
+    """output_mode: "append" 节点输出累积"""
+
+    def test_append_accumulates_across_iterations(self):
+        """body 节点配置 output_mode=append，每轮结果追加到数组"""
+        flow = Flow(
+            flow_id="test",
+            name="append_test",
+            nodes=[
+                {
+                    "id": "loop",
+                    "type": "iterator",
+                    "config": {"items": "$v.tasks"},
+                },
+                {
+                    "id": "body",
+                    "type": "tool",
+                    "config": {
+                        "tool_name": "test_echo",
+                        "inputs": {"item": "$o.loop.current_item"},
+                        "output_mode": "append",
+                    },
+                },
+                {
+                    "id": "end",
+                    "type": "python",
+                    "config": {"code": "def main():\n    return {'status': 'done'}"},
+                },
+            ],
+            edges=[
+                {"source": "loop", "target": "body"},
+                {"source": "body", "target": "loop"},
+                {"source": "loop", "target": "end", "condition": "$o.loop.done"},
+            ],
+        )
+        ctx = FlowContext(variables={"tasks": ["a", "b", "c"]})
+        run(collect_events(flow, ctx))
+
+        # body output 是累积数组
+        body_output = ctx.outputs["body"]
+        assert isinstance(body_output, list)
+        assert len(body_output) == 3
+        assert body_output[0] == {"echo": {"item": "a"}}
+        assert body_output[1] == {"echo": {"item": "b"}}
+        assert body_output[2] == {"echo": {"item": "c"}}
+
+    def test_default_overwrite_unchanged(self):
+        """不配置 output_mode 时保持覆写行为"""
+        flow = Flow(
+            flow_id="test",
+            name="overwrite_test",
+            nodes=[
+                {
+                    "id": "loop",
+                    "type": "iterator",
+                    "config": {"items": "$v.tasks"},
+                },
+                {
+                    "id": "body",
+                    "type": "tool",
+                    "config": {"tool_name": "test_echo", "inputs": {"item": "$o.loop.current_item"}},
+                },
+                {
+                    "id": "end",
+                    "type": "python",
+                    "config": {"code": "def main():\n    return {'done': True}"},
+                },
+            ],
+            edges=[
+                {"source": "loop", "target": "body"},
+                {"source": "body", "target": "loop"},
+                {"source": "loop", "target": "end", "condition": "$o.loop.done"},
+            ],
+        )
+        ctx = FlowContext(variables={"tasks": ["x", "y"]})
+        run(collect_events(flow, ctx))
+
+        # 只保留最后一次的输出
+        body_output = ctx.outputs["body"]
+        assert body_output == {"echo": {"item": "y"}}
+
+
+class TestIteratorStateCleanup:
+    """Iterator completion 后 state 清理"""
+
+    def test_state_cleared_on_done(self):
+        """迭代完成后 state 被清理为 None"""
+        flow = Flow(
+            flow_id="test",
+            name="cleanup_test",
+            nodes=[
+                {
+                    "id": "loop",
+                    "type": "iterator",
+                    "config": {"items": "$v.tasks"},
+                },
+                {
+                    "id": "body",
+                    "type": "tool",
+                    "config": {"tool_name": "test_echo", "inputs": {}},
+                },
+                {
+                    "id": "end",
+                    "type": "python",
+                    "config": {"code": "def main():\n    return {'ok': True}"},
+                },
+            ],
+            edges=[
+                {"source": "loop", "target": "body"},
+                {"source": "body", "target": "loop"},
+                {"source": "loop", "target": "end", "condition": "$o.loop.done"},
+            ],
+        )
+        ctx = FlowContext(variables={"tasks": ["a"]})
+        run(collect_events(flow, ctx))
+
+        assert ctx.get_variable("_iter_loop") is None
+
+    def test_preserve_state_option(self):
+        """preserve_state=true 时不清理"""
+        flow = Flow(
+            flow_id="test",
+            name="preserve_test",
+            nodes=[
+                {
+                    "id": "loop",
+                    "type": "iterator",
+                    "config": {"items": "$v.tasks", "preserve_state": True},
+                },
+                {
+                    "id": "body",
+                    "type": "tool",
+                    "config": {"tool_name": "test_echo", "inputs": {}},
+                },
+                {
+                    "id": "end",
+                    "type": "python",
+                    "config": {"code": "def main():\n    return {'ok': True}"},
+                },
+            ],
+            edges=[
+                {"source": "loop", "target": "body"},
+                {"source": "body", "target": "loop"},
+                {"source": "loop", "target": "end", "condition": "$o.loop.done"},
+            ],
+        )
+        ctx = FlowContext(variables={"tasks": ["a"]})
+        run(collect_events(flow, ctx))
+
+        state = ctx.get_variable("_iter_loop")
+        assert state is not None
+        assert state["index"] == 1
+
+
+class TestIteratorReentry:
+    """External re-entry 场景（plan → iterate → replan → re-iterate）"""
+
+    def test_reentry_after_completion(self):
+        """Iterator 完成后被外部节点重新路由，正确重新初始化"""
+
+        # producer 模拟：第一次输出 [A, B]，第二次输出 [C]
+        call_count = {"n": 0}
+
+        def producer_fn(context, inputs):
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                return {"tasks": ["A", "B"]}
+            return {"tasks": ["C"]}
+
+        # check 模拟：第一次 fail，第二次 pass
+        check_count = {"n": 0}
+
+        def check_fn(context, inputs):
+            check_count["n"] += 1
+            if check_count["n"] == 1:
+                return {"verdict": "fail"}
+            return {"verdict": "pass"}
+
+        registry.register_tool(
+            "test_producer",
+            Tool(name="test_producer", description="Produce tasks", function=producer_fn),
+        )
+        registry.register_tool(
+            "test_check",
+            Tool(name="test_check", description="Check results", function=check_fn),
+        )
+
+        flow = Flow(
+            flow_id="test",
+            name="reentry_test",
+            nodes=[
+                {
+                    "id": "producer",
+                    "type": "tool",
+                    "config": {"tool_name": "test_producer", "inputs": {}},
+                },
+                {
+                    "id": "loop",
+                    "type": "iterator",
+                    "config": {"items": "$o.producer.tasks"},
+                },
+                {
+                    "id": "work",
+                    "type": "tool",
+                    "config": {
+                        "tool_name": "test_echo",
+                        "inputs": {"item": "$o.loop.current_item"},
+                        "output_mode": "append",
+                    },
+                },
+                {
+                    "id": "check",
+                    "type": "tool",
+                    "config": {"tool_name": "test_check", "inputs": {}},
+                },
+                {
+                    "id": "end",
+                    "type": "python",
+                    "config": {"code": "def main():\n    return {'done': True}"},
+                },
+            ],
+            edges=[
+                {"source": "producer", "target": "loop"},
+                {"source": "loop", "target": "work"},
+                {"source": "work", "target": "loop"},
+                {"source": "loop", "target": "check", "condition": "$o.loop.done == true"},
+                {"source": "check", "target": "producer", "condition": "$o.check.verdict == fail"},
+                {"source": "check", "target": "end", "condition": "$o.check.verdict == pass"},
+            ],
+            cycle_limits={"loop": 20},
+        )
+        ctx = FlowContext()
+        run(collect_events(flow, ctx))
+
+        # work 应该累积了 3 次结果 (A, B from round 1 + C from round 2)
+        work_output = ctx.outputs["work"]
+        assert isinstance(work_output, list)
+        assert len(work_output) == 3
+        assert work_output[0] == {"echo": {"item": "A"}}
+        assert work_output[1] == {"echo": {"item": "B"}}
+        assert work_output[2] == {"echo": {"item": "C"}}
+
+        # loop 最终 state 已清理
+        assert ctx.get_variable("_iter_loop") is None
+
+        # check 最终为 pass
+        assert ctx.outputs["check"]["verdict"] == "pass"
+
+
+class TestItemsInterpolation:
+    """$items 事件占位符"""
+
+    def test_items_returns_full_array(self):
+        handler = IteratorNodeHandler()
+        config = {
+            "events": {
+                "on_start": {
+                    "name": "plan",
+                    "value": {"tasks": "$items", "total": "$count"},
+                }
+            }
+        }
+        state = {"items": ["x", "y", "z"], "index": 0}
+        evt = handler._build_event(config, "on_start", state)
+        assert evt is not None
+        assert evt["value"]["tasks"] == ["x", "y", "z"]
+        assert evt["value"]["total"] == 3
 
 
 # ── Agent instructions 注入测试 ──
