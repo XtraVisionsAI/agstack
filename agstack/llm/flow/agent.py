@@ -31,6 +31,7 @@ class Agent:
         max_tokens: int | None = None,
         max_turns: int = 10,
         *,
+        tool_choice: str = "auto",
         label: str | None = None,
         echo: bool = False,
     ):
@@ -53,6 +54,7 @@ class Agent:
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.max_turns = max_turns
+        self.tool_choice = tool_choice
         self.label = label
         self.echo = echo
 
@@ -135,7 +137,7 @@ class Agent:
 
                 if tools_schema:
                     kwargs["tools"] = tools_schema
-                    kwargs["tool_choice"] = "auto"
+                    kwargs["tool_choice"] = self.tool_choice
 
                 stream = await client.chat(stream=True, **kwargs)
 
