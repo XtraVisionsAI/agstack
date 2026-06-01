@@ -1,3 +1,9 @@
+## 1.24.1 (2026-06-01)
+
+### Fix
+
+- **agent**: make tool_choice configurable via instance attribute
+
 ## 1.24.0 (2026-05-29)
 
 ### Feat
