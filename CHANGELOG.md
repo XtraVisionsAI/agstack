@@ -1,3 +1,9 @@
+## 1.25.0 (2026-07-31)
+
+### Feat
+
+- **llm**: add usage callback hook to LLMClient
+
 ## 1.24.1 (2026-06-01)
 
 ### Fix
