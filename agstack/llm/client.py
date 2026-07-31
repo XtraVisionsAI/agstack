@@ -2,7 +2,8 @@
 
 import logging
 import time
-from typing import TYPE_CHECKING, Any, AsyncIterator, Literal, overload
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, AsyncIterator, Callable, Literal, overload
 
 import httpx
 from httpx import AsyncClient
@@ -22,6 +23,70 @@ from ..decorators import autoretry
 
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class UsageEvent:
+    """单次 LLM 调用的用量事件
+
+    :param model: 模型名称
+    :param kind: 调用类型（chat / chat_stream / vision / embedding / rerank）
+    :param prompt_tokens: 输入 token 数（后端未返回 usage 时为 0）
+    :param completion_tokens: 输出 token 数
+    :param total_tokens: 总 token 数
+    :param duration_ms: 调用耗时（毫秒）
+    """
+
+    model: str
+    kind: str
+    prompt_tokens: int
+    completion_tokens: int
+    total_tokens: int
+    duration_ms: int
+
+
+UsageCallback = Callable[[UsageEvent], None]
+"""usage 回调类型：必须同步、快速返回且自行捕获所有异常（不阻塞、不影响主调用链）"""
+
+_usage_callback: UsageCallback | None = None
+
+
+def set_usage_callback(callback: UsageCallback | None) -> None:
+    """注册全局 usage 回调（进程级单例，传 None 注销）
+
+    每次 LLM 调用（chat/chat_stream/vision/embed/rerank，含同步变体）完成后触发一次。
+    回调实现方应自行兜底异常；此处仍会捕获并告警，绝不向主调用链抛出。
+    """
+    global _usage_callback
+    _usage_callback = callback
+
+
+def _usage_field(usage: Any, key: str) -> int:
+    """从 usage（对象/字典/None）中容错提取整数字段"""
+    if usage is None:
+        return 0
+    value = usage.get(key) if isinstance(usage, dict) else getattr(usage, key, None)
+    return int(value or 0)
+
+
+def _emit_usage(model: str, kind: str, usage: Any, duration_ms: int) -> None:
+    """触发 usage 回调；usage 缺失时各分量记 0（保留 model/duration 供监控）"""
+    callback = _usage_callback
+    if callback is None:
+        return
+    try:
+        callback(
+            UsageEvent(
+                model=model,
+                kind=kind,
+                prompt_tokens=_usage_field(usage, "prompt_tokens"),
+                completion_tokens=_usage_field(usage, "completion_tokens"),
+                total_tokens=_usage_field(usage, "total_tokens"),
+                duration_ms=duration_ms,
+            )
+        )
+    except Exception:
+        logger.warning("Usage callback failed", exc_info=True)
 
 
 class LLMError(AppException):
@@ -140,10 +205,15 @@ class LLMClient:
         """
         start = time.time()
         model_name = model
+        # 内部调用类型标记（vision 经由 chat 转发时传入，不透传给推理后端）
+        usage_kind = kwargs.pop("usage_kind", "chat")
 
         try:
             if stream:
-                return self._chat_stream(messages, model_name, temperature, max_tokens, start, **kwargs)
+                stream_kind = "chat_stream" if usage_kind == "chat" else usage_kind
+                return self._chat_stream(
+                    messages, model_name, temperature, max_tokens, start, usage_kind=stream_kind, **kwargs
+                )
 
             @autoretry(
                 logger,
@@ -171,6 +241,7 @@ class LLMClient:
                 logger.info(f"LLM: model={model_name}, tokens={usage.total_tokens}, duration={duration_ms}ms")
             else:
                 logger.info(f"LLM: model={model_name}, duration={duration_ms}ms")
+            _emit_usage(model_name, usage_kind, usage, duration_ms)
 
             return response
 
@@ -210,6 +281,7 @@ class LLMClient:
         client = self._get_sync_client()
         start = time.time()
         model_name = model
+        usage_kind = kwargs.pop("usage_kind", "chat")
 
         try:
             response = client.chat.completions.create(
@@ -226,6 +298,7 @@ class LLMClient:
                 logger.info(f"LLM (sync): model={model_name}, tokens={usage.total_tokens}, duration={duration_ms}ms")
             else:
                 logger.info(f"LLM (sync): model={model_name}, duration={duration_ms}ms")
+            _emit_usage(model_name, usage_kind, usage, duration_ms)
 
             return response
 
@@ -250,10 +323,11 @@ class LLMClient:
         temperature: float,
         max_tokens: int | None,
         start_time: float,
+        usage_kind: str = "chat_stream",
         **kwargs: Any,
     ) -> AsyncIterator["ChatCompletionChunk"]:
         """流式响应"""
-        total_tokens = 0
+        final_usage = None
 
         try:
             # noinspection PyTypeChecker
@@ -269,15 +343,17 @@ class LLMClient:
             )
 
             async for chunk in stream:
-                # 收集 token 统计
+                # 收集 token 统计（usage 通常在末尾 chunk 返回）
                 if chunk.usage:
-                    total_tokens = chunk.usage.total_tokens
+                    final_usage = chunk.usage
 
                 yield chunk
 
             # 记录指标
             duration_ms = int((time.time() - start_time) * 1000)
+            total_tokens = final_usage.total_tokens if final_usage else 0
             logger.info(f"LLM stream: model={model}, tokens={total_tokens}, duration={duration_ms}ms")
+            _emit_usage(model, usage_kind, final_usage, duration_ms)
 
         except APITimeoutError as e:
             logger.error(f"LLM stream timeout: {e}")
@@ -294,6 +370,7 @@ class LLMClient:
         :param model: 模型名称
         :return: 向量列表
         """
+        start = time.time()
 
         @autoretry(
             logger,
@@ -309,6 +386,7 @@ class LLMClient:
 
         try:
             response = await _call()
+            _emit_usage(model, "embedding", getattr(response, "usage", None), int((time.time() - start) * 1000))
             data = getattr(response, "data", None)
             if data:
                 return [item.embedding for item in data]
@@ -326,9 +404,11 @@ class LLMClient:
         :return: 向量列表
         """
         client = self._get_sync_client()
+        start = time.time()
 
         try:
             response = client.embeddings.create(model=model, input=texts)
+            _emit_usage(model, "embedding", getattr(response, "usage", None), int((time.time() - start) * 1000))
             data = getattr(response, "data", None)
             if data:
                 return [item.embedding for item in data]
@@ -395,9 +475,9 @@ class LLMClient:
 
         # bypass type check of Literal param `stream`
         if stream:
-            return await self.chat(messages, model=model, stream=True, **kwargs)
+            return await self.chat(messages, model=model, stream=True, usage_kind="vision", **kwargs)
 
-        return await self.chat(messages, model=model, stream=False, **kwargs)
+        return await self.chat(messages, model=model, stream=False, usage_kind="vision", **kwargs)
 
     def vision_sync(
         self,
@@ -431,7 +511,7 @@ class LLMClient:
             {"role": "user", "content": content}  # type: ignore[list-item]
         ]
 
-        return self.chat_sync(messages, model=model, **kwargs)
+        return self.chat_sync(messages, model=model, usage_kind="vision", **kwargs)
 
     async def rerank(
         self,
@@ -449,6 +529,8 @@ class LLMClient:
         :return: [(index, score, text), ...] 按相关性降序排列
         """
         from httpx import ConnectTimeout, TimeoutException
+
+        start = time.time()
 
         @autoretry(
             logger,
@@ -474,6 +556,10 @@ class LLMClient:
             response = await _call()
             response.raise_for_status()
             data = response.json()
+
+            # 上报用量（仅后端返回 usage 时）
+            if usage := data.get("usage"):
+                _emit_usage(model, "rerank", usage, int((time.time() - start) * 1000))
 
             # 解析响应
             results = []
@@ -519,6 +605,7 @@ class LLMClient:
         import requests
 
         session = self._get_sync_http_session()
+        start = time.time()
 
         try:
             response = session.post(
@@ -534,6 +621,10 @@ class LLMClient:
             )
             response.raise_for_status()
             data = response.json()
+
+            # 上报用量（仅后端返回 usage 时）
+            if usage := data.get("usage"):
+                _emit_usage(model, "rerank", usage, int((time.time() - start) * 1000))
 
             results = []
             for item in data.get("results", []):
