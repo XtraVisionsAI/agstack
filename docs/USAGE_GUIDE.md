@@ -143,6 +143,78 @@ from agstack.llm.flow import registry
 registry.register_tool("web_search", WebSearchTool)
 ```
 
+**工具并发执行声明**（2.1.0+）:
+
+LLM 一轮返回多个 tool_calls 时默认严格串行执行。工具可声明与其它同类工具并发执行：
+
+```python
+Tool(
+    name="web_search",
+    description="Search the web",
+    function=search,
+    concurrency_safe=True,   # 默认 False（fail closed：不声明就当不安全）
+)
+```
+
+Agent 按 LLM 返回顺序扫描 tool_calls，把**连续的** `concurrency_safe` 调用聚成一组
+`asyncio.gather` 并发执行，其余仍串行。约定：
+
+- 组内各调用的事件（`TOOL_CALL_RESULT`、进度事件）按完成顺序发出，消费端靠 `toolCallId` 关联；
+- tool 消息写回消息历史时按 tool_call 原始顺序排列（OpenAI 协议要求与 `assistant.tool_calls` 对应）；
+- 组内单个调用失败不影响其它调用（沿用 `ToolResult(success=False)` 通道）；
+- 并发期间 `execution_records` / `pending_custom_events` 的追加顺序不再确定（asyncio 单线程，无数据损坏）。
+
+只把幂等、无共享可变状态依赖的工具（如只读检索）声明为 `concurrency_safe`。
+
+**工具执行钩子**（2.1.0+）:
+
+registry 级全局钩子链，在"工具入参进入工具函数前 / 结果落入上下文前"插入横切逻辑
+（参数级权限门、统一审计、超长输出落盘 spill、结果尺寸硬上限、脱敏），
+无需逐个包装工具。织入点在 `Tool.execute_async`——所有调用路径（agent 工具循环、
+tool 节点、`tool.run()` 直调）的唯一咽喉，子类覆写 `_execute` 也绕不开。
+
+```python
+from agstack.llm.flow import Deny, ToolHook, registry
+
+class KbPermissionGate(ToolHook):
+    async def pre_execute(self, context, tool, inputs):
+        if inputs.get("kb_id") not in allowed_kbs(context.user_id):
+            return Deny("no permission for this kb")   # 拒绝：工具不执行
+        return {**inputs, "tenant_id": resolve_tenant(context)}  # 或改写入参
+
+class ResultSpill(ToolHook):
+    async def post_execute(self, context, tool, result):
+        if len(str(result.result)) > 65536:
+            locator = spill_to_storage(result.result)
+            result.result = {"spilled": True, "locator": locator}
+        return result
+
+registry.register_tool_hook(KbPermissionGate())
+registry.register_tool_hook(ResultSpill(), prepend=True)   # 抢占链头：post 成为最外层
+```
+
+执行顺序与语义（洋葱模型）：
+
+- `pre_execute` 按注册顺序、`post_execute` 按逆序执行；`prepend=True` 抢占链头。
+- **pre 返回 Deny 或抛异常＝拒绝执行（fail closed）**：工具本体不执行，reason 转为
+  `ToolResult(success=False)` 反馈给模型，模型可自行改道，flow 不中断。
+  权限门自己出错时不放行。
+- **post 抛异常＝记日志放行原结果（fail open）**：审计/截断钩子的 bug 不毁掉主流程。
+- **Deny 的失败结果同样穿过 post 链**：审计钩子能看到全部结局，包括被拒绝的调用。
+- post 改写对三个出口同时生效：喂给 LLM 的 content、面向用户的 summary 输入、
+  `execution_records`。
+- `execution_records` 与 trace 记录的是 **pre 链改写后的入参**（日志＝执行事实）。
+- 钩子会被并发调用（`concurrency_safe` 工具组内同时穿链）：实现必须无状态或自行同步，
+  与 Tool 单例的既有纪律同构。
+- `registry.clear_tool_hooks()` 清空全局链（测试隔离用）。
+- 未注册任何钩子时行为与 2.0.0 一致（零开销路径）。
+
+明确不在本版范围（如有需要另行提案）：around/execute 阶段包装（timeout/retry 已有
+节点级 retry）、ask 审批决策（将来做 HITL 时作为 Deny 之外的第三种返回值追加，
+不破坏既有钩子）、按请求/租户的作用域过滤（如需采用"全局链 + `context.tool_hooks`
+局部链合并"扩展，局部链不入序列化）、独立观察型通道（纯观察＝post 原样返回，
+其失败已被 fail open 包容）。
+
 ### 3.2 Agent (代理)
 
 Agent 是调用 LLM 并可以使用工具的智能代理。
@@ -254,6 +326,26 @@ tool 节点的失败语义由 flow 作者通过 `on_error` 显式声明。
 已知限制：parallel 分支并发共享 context，用量整体归因到 parallel 容器节点，分支节点为 `None`；
 iteration 的 body 节点串行执行，正常按差值归因（容器节点不重复归因）。token 计费口径仍走
 LLM client 层的 usage 回调，与此无关。
+
+**协作式取消**（2.1.0+）:
+
+`FlowContext` 提供取消原语，宿主可从任意位置（另一个 task、HTTP 断连回调）请求停止执行：
+
+```python
+context = FlowContext()
+task = asyncio.create_task(flow.run(context))
+...
+context.cancel()          # 幂等；引擎在下一个检查点停止
+context.is_cancelled      # 长 I/O 工具可自查以提前返回
+```
+
+- **取消是协作式的**：粒度是"下一个检查点"（flow 节点执行前、retry 重试前、agent LLM
+  轮次开始、tool_call 执行前），不是即时中断。引擎不强杀在途的工具或 LLM 调用
+  （避免半写状态），只保证不再开始新的工作。
+- 停止形状：`stream()` 以 `RUN_ERROR`（code=`CANCELLED`）结束事件流；`run()` 抛
+  `FlowExecutionError("FLOW_CANCELLED")`。
+- 若取消到达时已无剩余工作（最后一个节点正常完成），flow 视为正常结束，不发取消事件。
+- 不调用 `cancel()` 的现有代码零感知，行为不变。
 
 ### 3.4 FlowContext (上下文)
 
