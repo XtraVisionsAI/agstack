@@ -257,11 +257,21 @@ class Agent:
                     )
                     continue
 
-                # 解析 LLM 返回的工具参数
+                # 解析 LLM 返回的工具参数；解析失败作为该次调用的失败反馈给模型，由模型自行重试
                 try:
                     tool_args = json.loads(tool_call["arguments"]) if tool_call["arguments"] else {}
-                except json.JSONDecodeError:
-                    tool_args = {}
+                except json.JSONDecodeError as e:
+                    error_content = json.dumps(
+                        {
+                            "error": f"Invalid tool arguments (JSON parse failed): {e}",
+                            "raw_arguments": tool_call["arguments"][:500],
+                        },
+                        ensure_ascii=False,
+                    )
+                    context.add_message(self.name, "tool", content=error_content, tool_call_id=tool_call["id"])
+                    # AG-UI: TOOL_CALL_RESULT (错误)
+                    yield event.tool_call_result(tool_call_id=tool_call["id"], content=error_content)
+                    continue
 
                 # 执行前进度事件
                 progress_label = tool.get_progress_label(tool_args)
