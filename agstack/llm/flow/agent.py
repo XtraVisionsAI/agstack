@@ -10,7 +10,7 @@ from ..client import get_llm_client
 from . import event
 from .context import Usage
 from .event import EventType
-from .exceptions import FlowError
+from .exceptions import AgentError, FlowError
 
 
 if TYPE_CHECKING:
@@ -32,6 +32,7 @@ class Agent:
         max_turns: int = 10,
         *,
         tool_choice: str = "auto",
+        on_max_turns: str = "finalize",
         label: str | None = None,
         echo: bool = False,
     ):
@@ -44,6 +45,7 @@ class Agent:
         :param temperature: 温度参数
         :param max_tokens: 最大 token 数
         :param max_turns: 最大轮次
+        :param on_max_turns: max_turns 耗尽时的行为，"finalize"（降级输出并标记 truncated）或 "error"（抛出异常）
         :param label: 面向用户的展示名称（控制 STEP 进度事件可见性）
         :param echo: 是否转发 TEXT_MESSAGE 给用户
         """
@@ -55,6 +57,7 @@ class Agent:
         self.max_tokens = max_tokens
         self.max_turns = max_turns
         self.tool_choice = tool_choice
+        self.on_max_turns = on_max_turns
         self.label = label
         self.echo = echo
 
@@ -117,6 +120,7 @@ class Agent:
         client = get_llm_client()
 
         # Agent 循环
+        assistant_content = ""
         for _ in range(self.max_turns):
             context.increment_turn()
 
@@ -333,3 +337,18 @@ class Agent:
 
             # 更新消息列表，继续下一轮
             messages = [self.get_system_message()] + context.history + context.get_messages(self.name)
+
+        # max_turns 耗尽：必须显式收尾，禁止静默截断
+        if self.on_max_turns == "error":
+            error_msg = f"Agent {self.name} exceeded max_turns={self.max_turns}"
+            yield event.run_error(message=error_msg, code="AGENT_MAX_TURNS_EXCEEDED")
+            raise AgentError("AGENT_MAX_TURNS_EXCEEDED", 500, {"agent": self.name})
+
+        # finalize：最后一轮已生成的部分文本作为降级输出，带截断标记
+        yield event.custom(
+            name="agent_max_turns",
+            value={"agentName": self.name, "maxTurns": self.max_turns},
+        )
+        context.set_output(self.name, {"result": assistant_content, "truncated": True})
+        yield event.text_message_end(message_id=msg_id)
+        context.set_variable("_agent_call_id", None)
