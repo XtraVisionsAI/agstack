@@ -80,6 +80,10 @@ class FlowContext:
         """设置变量值"""
         self.variables[key] = value
 
+    def pop_variable(self, key: str, default: Any = None) -> Any:
+        """取出并移除变量"""
+        return self.variables.pop(key, default)
+
     def update_variables(self, updates: dict[str, Any]) -> None:
         """批量更新变量"""
         self.variables.update(updates)

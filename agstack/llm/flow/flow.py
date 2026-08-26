@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any, AsyncIterator
 from uuid import uuid4
 
 from . import event
+from .context import Usage
 from .exceptions import NodeExecutionError
 
 
@@ -37,6 +38,23 @@ def _parse_literal(s: str) -> Any:
     except ValueError:
         pass
     return s
+
+
+def _usage_snapshot(usage: Usage) -> tuple[int, int, int]:
+    """记录节点执行前的用量快照，用于差值归因"""
+    return (usage.prompt_tokens, usage.completion_tokens, usage.total_tokens)
+
+
+def _usage_delta(usage: Usage, before: tuple[int, int, int]) -> Usage | None:
+    """节点执行前后的用量差值；全零返回 None，避免 trace 体积膨胀"""
+    delta = Usage(
+        prompt_tokens=usage.prompt_tokens - before[0],
+        completion_tokens=usage.completion_tokens - before[1],
+        total_tokens=usage.total_tokens - before[2],
+    )
+    if delta.prompt_tokens or delta.completion_tokens or delta.total_tokens:
+        return delta
+    return None
 
 
 @dataclass
@@ -353,6 +371,7 @@ class Flow:
             if node_type == "message":
                 msg_config = node.get("config", {})
                 context.trace.record_node_start(current_node_id, "message", inputs=msg_config)
+                usage_before = _usage_snapshot(context.usage)
 
                 # message 节点增加 STEP 事件
                 msg_sid = str(uuid4())
@@ -379,7 +398,11 @@ class Flow:
                 fin_evt["_echo"] = msg_config.get("echo", True)
                 yield fin_evt
 
-                context.trace.record_node_end(current_node_id, outputs={"result": text})
+                context.trace.record_node_end(
+                    current_node_id,
+                    outputs={"result": text},
+                    usage=_usage_delta(context.usage, usage_before),
+                )
                 current_node_id = self._resolve_next_node(current_node_id, context)
 
             elif node_type == "parallel":
@@ -387,6 +410,7 @@ class Flow:
                 branches = config.get("branches", [])
 
                 context.trace.record_node_start(current_node_id, "parallel", inputs=config)
+                usage_before = _usage_snapshot(context.usage)
 
                 parallel_sid = str(uuid4())
                 step_evt = event.step_started(step_name=f"parallel:{current_node_id}", step_id=parallel_sid)
@@ -417,7 +441,12 @@ class Flow:
                     try:
                         result = await branch_handler.execute(branch_node, context)
                         context.set_output(branch_id, result)
-                        context.trace.record_node_end(branch_id, outputs=result)
+                        # 分支并发共享 context，差值无法按分支切分——分支不记 usage，整体归因容器节点
+                        context.trace.record_node_end(
+                            branch_id,
+                            outputs=result,
+                            error=context.pop_variable("_last_node_error"),
+                        )
                     except Exception as e:
                         context.trace.record_node_end(branch_id, error=str(e))
                         raise
@@ -436,7 +465,11 @@ class Flow:
                 fin_evt["_echo"] = False
                 yield fin_evt
 
-                context.trace.record_node_end(current_node_id, outputs=merged)
+                context.trace.record_node_end(
+                    current_node_id,
+                    outputs=merged,
+                    usage=_usage_delta(context.usage, usage_before),
+                )
                 current_node_id = self._resolve_next_node(current_node_id, context)
 
             elif node_type == "iteration":
@@ -480,6 +513,7 @@ class Flow:
                             parent_id=context.trace._qualify_id(current_node_id),
                             iteration_index=idx,
                         )
+                        body_usage_before = _usage_snapshot(context.usage)
                         body_result = await body_handler.execute(body_node, context)
                         context.set_output(body_node_id, body_result)
                         # 收集 body 节点产生的 execution_records
@@ -487,6 +521,8 @@ class Flow:
                         context.trace.record_node_end(
                             body_node_id,
                             outputs=body_result,
+                            error=context.pop_variable("_last_node_error"),
+                            usage=_usage_delta(context.usage, body_usage_before),
                             tool_calls=body_tool_calls if body_tool_calls else None,
                         )
                     if body_nodes:
@@ -501,6 +537,7 @@ class Flow:
                 fin_evt["_echo"] = False
                 yield fin_evt
 
+                # body 串行执行已按差值归因 usage，容器不重复归因
                 context.trace.record_node_end(current_node_id, outputs=iteration_output)
                 current_node_id = self._resolve_next_node(current_node_id, context)
 
@@ -516,6 +553,7 @@ class Flow:
                     inputs=resolved_inputs,
                     label=config.get("label"),
                 )
+                usage_before = _usage_snapshot(context.usage)
 
                 # output_mode: "append" — 保存执行前的历史
                 append_mode = config.get("output_mode") == "append"
@@ -560,6 +598,9 @@ class Flow:
                 context.trace.record_node_end(
                     current_node_id,
                     outputs=context.outputs.get(current_node_id),
+                    # 节点内部容错的失败（如 tool 节点 on_error: "continue"）经 context 传递
+                    error=context.pop_variable("_last_node_error"),
+                    usage=_usage_delta(context.usage, usage_before),
                     tool_calls=tool_calls if tool_calls else None,
                     messages=messages,
                 )
