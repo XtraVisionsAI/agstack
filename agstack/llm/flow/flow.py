@@ -262,120 +262,14 @@ class Flow:
         return False
 
     async def run(self, context: "FlowContext") -> dict[str, Any]:
-        """执行 Flow"""
-        if not self.edges:
-            for node in self.nodes:
-                node_id = node.get("id")
-                if not node_id:
-                    continue
-                context.current_node = node_id
-                node_type: str = node.get("type", "")
-                handler = self._node_handlers.get(node_type)
-                if handler:
-                    result = await handler.execute(node, context)
-                    context.set_output(node_id, result)
-                else:
-                    raise NodeExecutionError("UNKNOWN_NODE_TYPE", args={"node_type": node_type})
-        else:
-            current_node_id: str | None = self.nodes[0]["id"] if self.nodes else None
-            visit_count: dict[str, int] = {}
+        """执行 Flow（非流式）
 
-            while current_node_id:
-                node = self.get_node_config(current_node_id)
-                if not node:
-                    break
-
-                # 循环计数与超限检测
-                visit_count[current_node_id] = visit_count.get(current_node_id, 0) + 1
-                force_fallback = self._check_cycle_limit(current_node_id, visit_count)
-                if force_fallback:
-                    current_node_id = self._resolve_next_node(current_node_id, context, force_fallback=True)
-                    continue
-
-                context.current_node = current_node_id
-                node_type: str = node.get("type", "")
-
-                if node_type == "message":
-                    config = node.get("config", {})
-                    template = config.get("content", "")
-                    text = template.format_map(_SafeFormatDict(context.variables))
-                    context.set_output(current_node_id, {"result": text})
-                    current_node_id = self._resolve_next_node(current_node_id, context)
-
-                elif node_type == "parallel":
-                    config = node.get("config", {})
-                    branches: list[str] = config.get("branches", [])
-
-                    async def _run_branch(branch_id: str) -> None:
-                        branch_node = self.get_node_config(branch_id)
-                        if not branch_node:
-                            return
-                        context.current_node = branch_id
-                        branch_type: str = branch_node.get("type", "")
-                        branch_handler = self._node_handlers.get(branch_type)
-                        if branch_handler:
-                            result = await branch_handler.execute(branch_node, context)
-                            context.set_output(branch_id, result)
-
-                    await asyncio.gather(*[_run_branch(bid) for bid in branches])
-                    merged: dict[str, Any] = {}
-                    for bid in branches:
-                        branch_result = context.outputs.get(bid, {})
-                        if isinstance(branch_result, dict):
-                            merged.update(branch_result)
-                    context.set_output(current_node_id, merged)
-                    current_node_id = self._resolve_next_node(current_node_id, context)
-
-                elif node_type == "iteration":
-                    config = node.get("config", {})
-                    items_ref = config.get("items", "")
-                    items = context.resolve_reference(items_ref) if isinstance(items_ref, str) else items_ref
-                    if not isinstance(items, list):
-                        items = [items]
-
-                    item_var = config.get("item_variable", "item")
-                    index_var = config.get("index_variable", "index")
-                    body_nodes: list[str] = config.get("body", [])
-                    results: list[Any] = []
-
-                    for idx, item in enumerate(items):
-                        context.set_variable(item_var, item)
-                        context.set_variable(index_var, idx)
-                        for body_node_id in body_nodes:
-                            body_node = self.get_node_config(body_node_id)
-                            if not body_node:
-                                continue
-                            body_type: str = body_node.get("type", "")
-                            body_handler = self._node_handlers.get(body_type)
-                            if body_handler:
-                                body_result = await body_handler.execute(body_node, context)
-                                context.set_output(body_node_id, body_result)
-                        if body_nodes:
-                            results.append(context.outputs.get(body_nodes[-1]))
-
-                    context.set_output(current_node_id, {"results": results})
-                    current_node_id = self._resolve_next_node(current_node_id, context)
-
-                elif node_type in self._node_handlers:
-                    handler = self._node_handlers[node_type]
-                    try:
-                        result = await handler.execute(node, context)
-                    except Exception as e:
-                        iter_target = self._find_iterator_fallback(current_node_id)
-                        if iter_target:
-                            context.set_variable(f"_iter_{iter_target}_error", str(e))
-                            context.set_output(current_node_id, {"error": str(e)})
-                            context.set_variable("_prev_node_id", current_node_id)
-                            current_node_id = iter_target
-                            continue
-                        raise
-                    context.set_output(current_node_id, result)
-                    context.set_variable("_prev_node_id", current_node_id)
-                    current_node_id = self._resolve_next_node(current_node_id, context)
-
-                else:
-                    raise NodeExecutionError("UNKNOWN_NODE_TYPE", args={"node_type": node_type})
-
+        stream() 的消费包装：两条路径共享同一执行引擎，重试策略、
+        FlowTrace、output_mode、iterator 状态清理等行为完全一致。
+        节点失败抛 NodeExecutionError（包装原始异常）。
+        """
+        async for _ in self.stream(context):
+            pass
         return context.outputs
 
     async def stream(self, context: "FlowContext") -> AsyncIterator[dict[str, Any]]:
