@@ -22,7 +22,7 @@ from .nodes import NodeHandler
 from .records import Record, Status
 from .registry import registry
 from .state import FlowState
-from .tool import Tool, ToolResult
+from .tool import Deny, Tool, ToolHook, ToolResult
 from .trace import EdgeTrace, FlowTrace, NodeTrace
 
 
@@ -32,6 +32,8 @@ __all__ = [
     # 核心抽象
     "Tool",
     "ToolResult",
+    "ToolHook",
+    "Deny",
     "Agent",
     "Flow",
     "FlowContext",

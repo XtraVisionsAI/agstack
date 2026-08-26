@@ -8,7 +8,7 @@ import copy
 from typing import Any, cast
 
 from .agent import Agent
-from .tool import Tool
+from .tool import Tool, ToolHook, clear_tool_hooks, register_tool_hook
 
 
 class FlowRegistry:
@@ -44,6 +44,19 @@ class FlowRegistry:
             self._tool_labels[name] = label
         if echo:
             self._tool_echo[name] = True
+
+    def register_tool_hook(self, hook: ToolHook, *, prepend: bool = False) -> None:
+        """注册全局工具执行钩子，对所有 Tool.execute_async 生效
+
+        pre_execute 按注册顺序、post_execute 按逆序执行；
+        prepend=True 抢占链头（其 post_execute 成为最外层，适合 spill/截断类钩子）。
+        钩子链存于 tool 模块（保持 registry→tool 单向导入），此处仅转发注册。
+        """
+        register_tool_hook(hook, prepend=prepend)
+
+    def clear_tool_hooks(self) -> None:
+        """清空全局工具钩子（测试隔离用）"""
+        clear_tool_hooks()
 
     def register_agent(
         self, name: str, agent_class: type[Agent], *, label: str | None = None, echo: bool = False

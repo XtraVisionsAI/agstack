@@ -28,6 +28,62 @@ class ToolResult:
     summary: str | None = None
 
 
+class Deny:
+    """pre_execute 的拒绝决策：工具本体不执行，reason 作为失败结果反馈给模型"""
+
+    def __init__(self, reason: str):
+        self.reason = reason
+
+
+class ToolHook:
+    """工具执行钩子基类（全局链，经 registry.register_tool_hook 注册）
+
+    子类覆写其一或两者；方法必须是 async def。
+    pre_execute 按注册顺序、post_execute 按逆序执行（洋葱模型）。
+    F3 并行工具落地后钩子会被并发调用：实现必须无状态或自行同步
+    （与 Tool 单例的既有纪律同构）。
+    """
+
+    async def pre_execute(
+        self, context: "FlowContext", tool: "Tool", inputs: dict[str, Any]
+    ) -> "dict[str, Any] | Deny":
+        """工具入参进入工具函数前调用
+
+        返回（可改写的）inputs 继续执行；返回 Deny 拒绝执行；
+        抛异常按 Deny 处理（fail closed：权限门自己出错时不放行）。
+        """
+        return inputs
+
+    async def post_execute(self, context: "FlowContext", tool: "Tool", result: "ToolResult") -> "ToolResult":
+        """结果落入上下文前调用，原样返回＝纯观察
+
+        可替换/截断/落盘换 locator；改写对 LLM 消费内容、用户摘要、
+        execution_records 三个出口同时生效。抛异常记日志并放行原结果
+        （fail open：审计钩子的 bug 不毁掉主流程）。
+        Deny 产生的失败结果同样穿过 post 链（审计要看到被拒绝的调用）。
+        """
+        return result
+
+
+_TOOL_HOOKS: list[ToolHook] = []
+
+
+def register_tool_hook(hook: ToolHook, *, prepend: bool = False) -> None:
+    """注册全局工具执行钩子，对所有 Tool.execute_async 生效
+
+    prepend=True 抢占链头（其 post_execute 成为最外层，适合 spill/截断类钩子）。
+    """
+    if prepend:
+        _TOOL_HOOKS.insert(0, hook)
+    else:
+        _TOOL_HOOKS.append(hook)
+
+
+def clear_tool_hooks() -> None:
+    """清空全局工具钩子（测试隔离用）"""
+    _TOOL_HOOKS.clear()
+
+
 class Tool:
     """工具定义"""
 
@@ -85,10 +141,39 @@ class Tool:
         return self.label
 
     async def execute_async(self, context: "FlowContext", inputs: dict[str, Any] | None = None) -> ToolResult:
-        """异步执行工具（包含计时、摘要生成、结果格式化、可观测性记录）"""
+        """异步执行工具（包含钩子链、计时、摘要生成、结果格式化、可观测性记录）"""
         args = inputs or {}
         _t0 = time.perf_counter()
-        result = await self._execute(context, args)
+
+        # pre 钩子链（注册顺序）：可改写入参；返回 Deny 或抛异常＝拒绝执行（fail closed）
+        result: ToolResult | None = None
+        for hook in _TOOL_HOOKS:
+            try:
+                outcome = await hook.pre_execute(context, self, args)
+            except Exception as e:
+                logger.warning("Tool hook pre_execute failed for %s: %s", self.name, e, exc_info=True)
+                outcome = Deny(f"tool hook error: {e}")
+            if isinstance(outcome, Deny):
+                result = ToolResult(name=self.name, arguments=args, result={}, success=False, error=outcome.reason)
+                break
+            args = outcome
+
+        if result is None:
+            result = await self._execute(context, args)
+
+        # post 钩子链（逆序）：可改写结果；抛异常＝放行原结果（fail open）。
+        # Deny 的失败结果同样穿过 post 链，审计钩子能看到被拒绝的调用。
+        for hook in reversed(_TOOL_HOOKS):
+            try:
+                revised = await hook.post_execute(context, self, result)
+            except Exception as e:
+                logger.warning("Tool hook post_execute failed for %s: %s", self.name, e, exc_info=True)
+                continue
+            if isinstance(revised, ToolResult):
+                result = revised
+            else:
+                logger.warning("Tool hook post_execute for %s returned %r, ignored", self.name, type(revised))
+
         _duration_ms = int((time.perf_counter() - _t0) * 1000)
 
         # 计算 LLM 消费内容
