@@ -171,6 +171,17 @@ class MyAgent(Agent):
 registry.register_agent("my_agent", lambda: MyAgent(model="gpt-4"))
 ```
 
+**max_turns 耗尽行为**（1.26.0+）:
+
+Agent 的 tool-use 循环打满 `max_turns` 时不再静默截断，行为由 `on_max_turns` 控制：
+
+- `"finalize"`（默认）：发出 `CUSTOM` 事件 `agent_max_turns`（value: `{"agentName", "maxTurns"}`），
+  以 `TEXT_MESSAGE_END` 闭合消息流，并把最后一轮已生成的部分文本作为降级输出写入
+  `context.outputs[agent_name]`，附带 `"truncated": True` 标记。
+- `"error"`：发出 `RUN_ERROR` 事件后抛出 `AgentError("AGENT_MAX_TURNS_EXCEEDED")`。
+
+下游可通过 `$o.<agent>.truncated` 判断输出是否被截断。
+
 ### 3.3 Flow (流程)
 
 Flow 用于编排多个 Agent 和 Tool 的执行。
@@ -207,6 +218,42 @@ flow = Flow(
 context = FlowContext(session_id="test")
 result = await flow.run(context)
 ```
+
+**run() 与 stream()**（1.26.0+）:
+
+`run()` 是 `stream()` 的非事件消费包装，两条路径共享同一执行引擎：重试策略（`retry` 配置）、
+执行轨迹（`FlowTrace`）、`output_mode: "append"`、iterator 状态清理的行为完全一致。
+节点失败统一抛 `NodeExecutionError`（包装原始异常）。
+
+**tool 节点失败语义**（1.26.0+）:
+
+tool 节点默认失败即中断 flow（经重试耗尽后抛 `NodeExecutionError`）。可通过节点级
+`on_error` 开关声明降级语义：
+
+```python
+{
+    "id": "search",
+    "type": "tool",
+    "config": {
+        "tool_name": "retrieval",
+        "on_error": "continue",   # 默认 "raise"
+    }
+}
+```
+
+- `"raise"`（默认）：与既有行为一致，失败中断 flow。
+- `"continue"`：不抛异常，节点输出 `{"success": False, "error": <错误信息>}`，flow 继续走边路由，
+  条件边可用 `$o.search.success == false` 分流到兜底分支；错误同时记入该节点的 `NodeTrace.error`。
+
+注意：与 agent 内部 tool-use 循环的容错（工具失败结果拼进上下文由模型自行应对）不同，
+tool 节点的失败语义由 flow 作者通过 `on_error` 显式声明。
+
+**per-node token 归因**（1.26.0+）:
+
+引擎按节点执行前后 `context.usage` 的差值填充 `NodeTrace.usage`；无 LLM 调用的节点为 `None`。
+已知限制：parallel 分支并发共享 context，用量整体归因到 parallel 容器节点，分支节点为 `None`；
+iteration 的 body 节点串行执行，正常按差值归因（容器节点不重复归因）。token 计费口径仍走
+LLM client 层的 usage 回调，与此无关。
 
 ### 3.4 FlowContext (上下文)
 
