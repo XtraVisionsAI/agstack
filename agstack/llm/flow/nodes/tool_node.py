@@ -33,5 +33,10 @@ class ToolNodeHandler(NodeHandler):
         tool = self._create_tool(config)
         result = await tool.execute_async(context, inputs=resolved)
         if not result.success:
+            # on_error: "continue" — 失败降级为节点输出，flow 继续走边路由，
+            # 条件边可用 $o.<node>.success == false 分流；默认 "raise" 保持原语义
+            if config.get("on_error") == "continue":
+                context.set_variable("_last_node_error", result.error)
+                return {"success": False, "error": result.error}
             raise ToolExecutionError("TOOL_EXECUTION_FAILED", args={"tool_name": tool.name, "error": result.error})
         return result.result
