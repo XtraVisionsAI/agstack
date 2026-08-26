@@ -1,3 +1,11 @@
+## 2.1.0 (2026-08-26)
+
+### Feat
+
+- **tool**: add global pre/post execution hook chain
+- **agent**: run consecutive concurrency-safe tool calls in parallel
+- **flow**: add cooperative cancellation via FlowContext.cancel()
+
 ## 2.0.0 (2026-08-26)
 
 ### BREAKING CHANGE
