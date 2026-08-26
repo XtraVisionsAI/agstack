@@ -1,3 +1,22 @@
+## 2.0.0 (2026-08-26)
+
+### BREAKING CHANGE
+
+- node failures from run() now raise NodeExecutionError
+(wrapping the original exception) instead of the raw exception, matching
+the stream() path.
+
+### Feat
+
+- **flow**: add on_error continue option to tool node
+- **flow**: attribute per-node token usage in FlowTrace
+
+### Fix
+
+- **flow**: converge run() into stream() to share one execution engine
+- **agent**: finalize explicitly when max_turns is exhausted
+- **agent**: feed invalid tool-call arguments back to the model
+
 ## 1.25.1 (2026-08-19)
 
 ## 1.25.0 (2026-07-31)
