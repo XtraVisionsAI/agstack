@@ -122,6 +122,13 @@ class Agent:
         # Agent 循环
         assistant_content = ""
         for _ in range(self.max_turns):
+            # 协作式取消检查点：不再开始新的 LLM 轮次
+            if context.is_cancelled:
+                if not context.get_variable("_cancel_emitted"):
+                    context.set_variable("_cancel_emitted", True)
+                    yield event.run_error(message="FLOW_CANCELLED", code="CANCELLED")
+                return
+
             context.increment_turn()
 
             # 调用模型
@@ -245,6 +252,13 @@ class Agent:
 
             # 执行工具调用
             for tool_call in tool_calls:
+                # 协作式取消检查点：不再开始新的工具执行（不中断在途工具）
+                if context.is_cancelled:
+                    if not context.get_variable("_cancel_emitted"):
+                        context.set_variable("_cancel_emitted", True)
+                        yield event.run_error(message="FLOW_CANCELLED", code="CANCELLED")
+                    return
+
                 tool = self.get_tool_by_name(tool_call["name"])
                 if not tool:
                     error_msg = f"Tool not found: {tool_call['name']}"

@@ -10,7 +10,7 @@ from uuid import uuid4
 
 from . import event
 from .context import Usage
-from .exceptions import NodeExecutionError
+from .exceptions import FlowExecutionError, NodeExecutionError
 
 
 if TYPE_CHECKING:
@@ -234,6 +234,12 @@ class Flow:
         last_error: Exception | None = None
 
         for attempt in range(policy.max_retries + 1):
+            # 协作式取消检查点：取消后不再开始新的重试
+            if attempt > 0 and context.is_cancelled:
+                if not context.get_variable("_cancel_emitted"):
+                    context.set_variable("_cancel_emitted", True)
+                    yield event.run_error(message="FLOW_CANCELLED", code="CANCELLED")
+                return
             try:
                 if attempt > 0:
                     wait = policy.delay * (policy.backoff ** (attempt - 1))
@@ -284,10 +290,12 @@ class Flow:
 
         stream() 的消费包装：两条路径共享同一执行引擎，重试策略、
         FlowTrace、output_mode、iterator 状态清理等行为完全一致。
-        节点失败抛 NodeExecutionError（包装原始异常）。
+        节点失败抛 NodeExecutionError（包装原始异常）；
+        取消（context.cancel()）抛 FlowExecutionError("FLOW_CANCELLED")。
         """
-        async for _ in self.stream(context):
-            pass
+        async for evt in self.stream(context):
+            if evt.get("type") == event.EventType.RUN_ERROR and evt.get("code") == "CANCELLED":
+                raise FlowExecutionError("FLOW_CANCELLED", args={"flow": self.name})
         return context.outputs
 
     async def stream(self, context: "FlowContext") -> AsyncIterator[dict[str, Any]]:
@@ -310,11 +318,22 @@ class Flow:
             context.trace.finished_at = time.time()
             context.trace.total_usage = context.usage
 
+        # 取消停止：RUN_ERROR(code=CANCELLED) 是终止事件，事件流以其结束
+        if context.get_variable("_cancel_emitted"):
+            return
+
         yield event.step_finished(step_name=f"flow:{self.name}", step_id=flow_sid)
 
     async def _stream_sequential(self, context: "FlowContext") -> AsyncIterator[dict[str, Any]]:
         """顺序流式执行"""
         for node in self.nodes:
+            # 协作式取消检查点：不再开始新的节点执行
+            if context.is_cancelled:
+                if not context.get_variable("_cancel_emitted"):
+                    context.set_variable("_cancel_emitted", True)
+                    yield event.run_error(message="FLOW_CANCELLED", code="CANCELLED")
+                return
+
             node_id = node.get("id")
             if not node_id:
                 continue
@@ -350,6 +369,13 @@ class Flow:
         visit_count: dict[str, int] = {}
 
         while current_node_id:
+            # 协作式取消检查点：不再开始新的节点执行（粒度是节点边界，不中断在途节点）
+            if context.is_cancelled:
+                if not context.get_variable("_cancel_emitted"):
+                    context.set_variable("_cancel_emitted", True)
+                    yield event.run_error(message="FLOW_CANCELLED", code="CANCELLED")
+                return
+
             node = self.get_node_config(current_node_id)
             if not node:
                 yield event.run_error(

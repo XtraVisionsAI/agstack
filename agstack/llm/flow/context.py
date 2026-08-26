@@ -2,6 +2,7 @@
 
 """统一的执行上下文"""
 
+import asyncio
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -66,6 +67,9 @@ class FlowContext:
     # 业务自定义事件缓冲（tool 内部通过 context 注入，agent 循环中 flush）
     pending_custom_events: list[dict[str, Any]] = field(default_factory=list)
 
+    # 协作式取消信号（不参与序列化，恢复即未取消）
+    _cancel_event: asyncio.Event = field(default_factory=asyncio.Event, repr=False)
+
     def __post_init__(self) -> None:
         if self.trace is None:
             from .trace import FlowTrace
@@ -83,6 +87,19 @@ class FlowContext:
     def pop_variable(self, key: str, default: Any = None) -> Any:
         """取出并移除变量"""
         return self.variables.pop(key, default)
+
+    def cancel(self) -> None:
+        """请求取消执行（幂等）
+
+        协作式取消：引擎在下一个检查点（节点执行前、agent 轮次开始、
+        tool_call 执行前）停止，不强杀在途的工具或 LLM 调用。
+        """
+        self._cancel_event.set()
+
+    @property
+    def is_cancelled(self) -> bool:
+        """是否已请求取消（长 I/O 工具可自查以提前返回）"""
+        return self._cancel_event.is_set()
 
     def update_variables(self, updates: dict[str, Any]) -> None:
         """批量更新变量"""
