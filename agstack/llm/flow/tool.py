@@ -41,6 +41,7 @@ class Tool:
         label: str | None = None,
         echo: bool = False,
         category: str | None = None,
+        concurrency_safe: bool = False,
         summary_fn: Callable[["ToolResult"], str | None] | None = None,
         result_formatter: Callable[["ToolResult"], str] | None = None,
         progress_label_fn: Callable[[dict[str, Any]], str] | None = None,
@@ -54,6 +55,7 @@ class Tool:
         :param label: 面向用户的展示名称（控制 STEP/TOOL_CALL 进度事件可见性）
         :param echo: 是否转发 TEXT_MESSAGE 给用户
         :param category: 工具分类（retrieval / analysis / action / utility）
+        :param concurrency_safe: 声明该工具可与其它 concurrency_safe 工具并发执行（默认串行）
         :param summary_fn: 生成面向用户摘要的函数 (ToolResult) -> str | None
         :param result_formatter: 自定义 LLM 内容格式化函数 (ToolResult) -> str
         :param progress_label_fn: 基于调用参数生成动态进度描述 (args) -> str
@@ -65,6 +67,7 @@ class Tool:
         self.label = label
         self.echo = echo
         self.category = category
+        self.concurrency_safe = concurrency_safe
         self.summary_fn = summary_fn
         self.result_formatter = result_formatter
         self.progress_label_fn = progress_label_fn

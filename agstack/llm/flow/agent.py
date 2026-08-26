@@ -2,6 +2,7 @@
 
 """Agent 定义和执行"""
 
+import asyncio
 import json
 from typing import TYPE_CHECKING, Any, AsyncIterator
 from uuid import uuid4
@@ -75,6 +76,149 @@ class Agent:
             if tool.name == name:
                 return tool
         return None
+
+    def _group_tool_calls(self, tool_calls: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
+        """按声明分组：连续的 concurrency_safe 调用聚为一组并发执行，其余单独成组串行
+
+        未注册/未声明的工具一律按不安全处理（fail closed），
+        默认全 False 时每组恰好一个调用，行为与串行完全一致。
+        """
+        groups: list[list[dict[str, Any]]] = []
+        prev_safe = False
+        for tc in tool_calls:
+            tool = self.get_tool_by_name(tc["name"])
+            safe = bool(tool and tool.concurrency_safe)
+            if safe and prev_safe:
+                groups[-1].append(tc)
+            else:
+                groups.append([tc])
+            prev_safe = safe
+        return groups
+
+    async def _stream_tool_call(
+        self,
+        context: "FlowContext",
+        tool_call: dict[str, Any],
+        message_sink: list[dict[str, Any]] | None = None,
+    ) -> AsyncIterator[dict[str, Any]]:
+        """执行单个 tool_call，yield 其 AG-UI 事件
+
+        tool 消息默认即时写回 context；并发分组执行时传入 message_sink 收集，
+        由调用方在组完成后按 tool_call 原始顺序统一写回
+        （OpenAI 协议要求 tool 消息与 assistant.tool_calls 顺序对应）。
+        """
+
+        def _emit_message(**kwargs: Any) -> None:
+            if message_sink is None:
+                context.add_message(self.name, "tool", **kwargs)
+            else:
+                message_sink.append(kwargs)
+
+        tool = self.get_tool_by_name(tool_call["name"])
+        if not tool:
+            error_content = json.dumps({"error": f"Tool not found: {tool_call['name']}"}, ensure_ascii=False)
+            _emit_message(content=error_content, tool_call_id=tool_call["id"])
+            # AG-UI: TOOL_CALL_RESULT (错误)
+            yield event.tool_call_result(tool_call_id=tool_call["id"], content=error_content)
+            return
+
+        # 解析 LLM 返回的工具参数；解析失败作为该次调用的失败反馈给模型，由模型自行重试
+        try:
+            tool_args = json.loads(tool_call["arguments"]) if tool_call["arguments"] else {}
+        except json.JSONDecodeError as e:
+            error_content = json.dumps(
+                {
+                    "error": f"Invalid tool arguments (JSON parse failed): {e}",
+                    "raw_arguments": tool_call["arguments"][:500],
+                },
+                ensure_ascii=False,
+            )
+            _emit_message(content=error_content, tool_call_id=tool_call["id"])
+            # AG-UI: TOOL_CALL_RESULT (错误)
+            yield event.tool_call_result(tool_call_id=tool_call["id"], content=error_content)
+            return
+
+        # 执行前进度事件
+        progress_label = tool.get_progress_label(tool_args)
+        if progress_label:
+            yield event.custom(
+                name="skill_progress",
+                value={
+                    "progressId": tool_call["id"],
+                    "description": progress_label,
+                    "status": "running",
+                },
+            )
+
+        # 执行工具（传入 LLM 解析的参数作为 inputs）
+        result = await tool.execute_async(context, tool_args)
+
+        # 执行后进度事件
+        if progress_label:
+            yield event.custom(
+                name="skill_progress",
+                value={
+                    "progressId": tool_call["id"],
+                    "status": "completed" if result.success else "failed",
+                },
+            )
+
+        # 使用 result.content 作为 LLM 上下文（Tool 已计算好）
+        result_content = result.content or (
+            json.dumps(result.result, ensure_ascii=False)
+            if result.success
+            else json.dumps({"error": result.error}, ensure_ascii=False)
+        )
+        _emit_message(content=result_content, tool_call_id=tool_call["id"], summary=result.summary)
+
+        # AG-UI: TOOL_CALL_RESULT
+        yield event.tool_call_result(tool_call_id=tool_call["id"], content=result_content)
+
+        # 实时用户进度 — 有 summary 时告知前端
+        if result.summary:
+            yield event.custom(
+                name="tool_progress",
+                value={
+                    "tool_call_id": tool_call["id"],
+                    "tool_name": result.name,
+                    "success": result.success,
+                    "summary": result.summary,
+                },
+            )
+
+        # 业务自定义事件 — flush pending
+        for pending_evt in context.pop_pending_custom_events():
+            yield pending_evt
+
+    async def _gather_tool_calls(
+        self, context: "FlowContext", group: list[dict[str, Any]]
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        """并发执行一组 concurrency_safe 的 tool_calls
+
+        返回 (按完成顺序展平的事件列表, 按原始顺序展平的 tool 消息 kwargs 列表)。
+        组内事件先缓冲、gather 结束后统一交调用方 yield，保证单 generator 语义；
+        单个调用的意外异常兜底转失败结果，不影响组内其它调用。
+        注意：并发期间 execution_records / pending_custom_events 的追加顺序不再确定。
+        """
+        event_buffers: list[list[dict[str, Any]]] = [[] for _ in group]
+        message_buffers: list[list[dict[str, Any]]] = [[] for _ in group]
+        finish_order: list[int] = []
+
+        async def _run_one(i: int, tc: dict[str, Any]) -> None:
+            try:
+                async for evt in self._stream_tool_call(context, tc, message_sink=message_buffers[i]):
+                    event_buffers[i].append(evt)
+            except Exception as e:
+                error_content = json.dumps({"error": str(e)}, ensure_ascii=False)
+                message_buffers[i].append({"content": error_content, "tool_call_id": tc["id"]})
+                event_buffers[i].append(event.tool_call_result(tool_call_id=tc["id"], content=error_content))
+            finally:
+                finish_order.append(i)
+
+        await asyncio.gather(*[_run_one(i, tc) for i, tc in enumerate(group)])
+        events = [evt for i in finish_order for evt in event_buffers[i]]
+        messages = [msg for msgs in message_buffers for msg in msgs]
+        return events, messages
 
     async def run(self, context: "FlowContext", inputs: dict[str, Any] | None = None) -> dict[str, Any]:
         """执行 Agent 逻辑"""
@@ -250,8 +394,8 @@ class Agent:
                 context.set_variable("_agent_call_id", None)
                 return
 
-            # 执行工具调用
-            for tool_call in tool_calls:
+            # 执行工具调用：连续的 concurrency_safe 调用聚组并发，其余保持串行（默认全串行）
+            for group in self._group_tool_calls(tool_calls):
                 # 协作式取消检查点：不再开始新的工具执行（不中断在途工具）
                 if context.is_cancelled:
                     if not context.get_variable("_cancel_emitted"):
@@ -259,95 +403,17 @@ class Agent:
                         yield event.run_error(message="FLOW_CANCELLED", code="CANCELLED")
                     return
 
-                tool = self.get_tool_by_name(tool_call["name"])
-                if not tool:
-                    error_msg = f"Tool not found: {tool_call['name']}"
-                    context.add_message(
-                        self.name,
-                        "tool",
-                        content=json.dumps({"error": error_msg}, ensure_ascii=False),
-                        tool_call_id=tool_call["id"],
-                    )
-                    # AG-UI: TOOL_CALL_RESULT (错误)
-                    yield event.tool_call_result(
-                        tool_call_id=tool_call["id"],
-                        content=json.dumps({"error": error_msg}, ensure_ascii=False),
-                    )
-                    continue
-
-                # 解析 LLM 返回的工具参数；解析失败作为该次调用的失败反馈给模型，由模型自行重试
-                try:
-                    tool_args = json.loads(tool_call["arguments"]) if tool_call["arguments"] else {}
-                except json.JSONDecodeError as e:
-                    error_content = json.dumps(
-                        {
-                            "error": f"Invalid tool arguments (JSON parse failed): {e}",
-                            "raw_arguments": tool_call["arguments"][:500],
-                        },
-                        ensure_ascii=False,
-                    )
-                    context.add_message(self.name, "tool", content=error_content, tool_call_id=tool_call["id"])
-                    # AG-UI: TOOL_CALL_RESULT (错误)
-                    yield event.tool_call_result(tool_call_id=tool_call["id"], content=error_content)
-                    continue
-
-                # 执行前进度事件
-                progress_label = tool.get_progress_label(tool_args)
-                if progress_label:
-                    yield event.custom(
-                        name="skill_progress",
-                        value={
-                            "progressId": tool_call["id"],
-                            "description": progress_label,
-                            "status": "running",
-                        },
-                    )
-
-                # 执行工具（传入 LLM 解析的参数作为 inputs）
-                result = await tool.execute_async(context, tool_args)
-
-                # 执行后进度事件
-                if progress_label:
-                    yield event.custom(
-                        name="skill_progress",
-                        value={
-                            "progressId": tool_call["id"],
-                            "status": "completed" if result.success else "failed",
-                        },
-                    )
-
-                # 使用 result.content 作为 LLM 上下文（Tool 已计算好）
-                result_content = result.content or (
-                    json.dumps(result.result, ensure_ascii=False)
-                    if result.success
-                    else json.dumps({"error": result.error}, ensure_ascii=False)
-                )
-                context.add_message(
-                    self.name,
-                    "tool",
-                    content=result_content,
-                    tool_call_id=tool_call["id"],
-                    summary=result.summary,
-                )
-
-                # AG-UI: TOOL_CALL_RESULT
-                yield event.tool_call_result(tool_call_id=tool_call["id"], content=result_content)
-
-                # 实时用户进度 — 有 summary 时告知前端
-                if result.summary:
-                    yield event.custom(
-                        name="tool_progress",
-                        value={
-                            "tool_call_id": tool_call["id"],
-                            "tool_name": result.name,
-                            "success": result.success,
-                            "summary": result.summary,
-                        },
-                    )
-
-                # 业务自定义事件 — flush pending
-                for pending_evt in context.pop_pending_custom_events():
-                    yield pending_evt
+                if len(group) == 1:
+                    # 串行路径：事件实时 yield，tool 消息即时写回
+                    async for evt in self._stream_tool_call(context, group[0]):
+                        yield evt
+                else:
+                    # 并发组：事件按完成顺序 yield，tool 消息按原始顺序写回
+                    group_events, group_messages = await self._gather_tool_calls(context, group)
+                    for evt in group_events:
+                        yield evt
+                    for msg in group_messages:
+                        context.add_message(self.name, "tool", **msg)
 
             # 更新消息列表，继续下一轮
             messages = [self.get_system_message()] + context.history + context.get_messages(self.name)
