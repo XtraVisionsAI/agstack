@@ -1,3 +1,9 @@
+## 2.2.0 (2026-10-05)
+
+### Feat
+
+- **agent**: add per-turn request_overrides hook and retry_empty_response
+
 ## 2.1.0 (2026-08-26)
 
 ### Feat
