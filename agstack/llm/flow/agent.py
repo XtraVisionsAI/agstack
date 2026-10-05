@@ -34,6 +34,7 @@ class Agent:
         *,
         tool_choice: str = "auto",
         on_max_turns: str = "finalize",
+        retry_empty_response: bool = False,
         label: str | None = None,
         echo: bool = False,
     ):
@@ -47,6 +48,8 @@ class Agent:
         :param max_tokens: 最大 token 数
         :param max_turns: 最大轮次
         :param on_max_turns: max_turns 耗尽时的行为，"finalize"（降级输出并标记 truncated）或 "error"（抛出异常）
+        :param retry_empty_response: 一轮既无文字也无 tool_calls 时（如推理模型把输出预算耗尽在 reasoning 上）
+            以 ``request_overrides(..., retry=True)`` 的覆盖参数重试一次
         :param label: 面向用户的展示名称（控制 STEP 进度事件可见性）
         :param echo: 是否转发 TEXT_MESSAGE 给用户
         """
@@ -59,6 +62,7 @@ class Agent:
         self.max_turns = max_turns
         self.tool_choice = tool_choice
         self.on_max_turns = on_max_turns
+        self.retry_empty_response = retry_empty_response
         self.label = label
         self.echo = echo
 
@@ -69,6 +73,27 @@ class Agent:
     def get_tools_schema(self) -> list[dict[str, Any]]:
         """获取工具 schema"""
         return [tool.to_openai_tool() for tool in self.tools]
+
+    def request_overrides(self, context: "FlowContext", turn: int, *, retry: bool = False) -> dict[str, Any]:
+        """按轮覆盖本次模型请求参数的钩子（子类实现，默认不覆盖）
+
+        返回值合并进 ``client.chat`` 的 kwargs：``extra_body`` 按键合并，其余键直接覆盖。
+        典型用法：决策轮 / 作答轮分别设置 ``extra_body={"enable_thinking": ...}`` 与 ``max_tokens``；
+        ``retry=True`` 表示上一次请求空响应后的重试。
+
+        :param turn: 本 agent 本次运行内的轮次，从 1 起
+        """
+        return {}
+
+    @staticmethod
+    def _apply_overrides(kwargs: dict[str, Any], overrides: dict[str, Any]) -> None:
+        for key, value in overrides.items():
+            if key == "extra_body" and isinstance(value, dict):
+                merged = dict(kwargs.get("extra_body") or {})
+                merged.update(value)
+                kwargs["extra_body"] = merged
+            else:
+                kwargs[key] = value
 
     def get_tool_by_name(self, name: str) -> "Tool | None":
         """根据名称获取工具"""
@@ -265,7 +290,7 @@ class Agent:
 
         # Agent 循环
         assistant_content = ""
-        for _ in range(self.max_turns):
+        for turn in range(1, self.max_turns + 1):
             # 协作式取消检查点：不再开始新的 LLM 轮次
             if context.is_cancelled:
                 if not context.get_variable("_cancel_emitted"):
@@ -275,96 +300,105 @@ class Agent:
 
             context.increment_turn()
 
-            # 调用模型
-            assistant_content = ""
-            tool_calls: list[dict[str, Any]] = []
-            tool_calls_buffer: dict[int, dict[str, Any]] = {}
+            # 调用模型；空响应（无文字无 tool_calls）且开启 retry_empty_response 时以重试覆盖参数再请求一次
+            attempt = 0
+            while True:
+                assistant_content = ""
+                tool_calls: list[dict[str, Any]] = []
+                tool_calls_buffer: dict[int, dict[str, Any]] = {}
 
-            try:
-                kwargs: dict[str, Any] = {
-                    "messages": messages,
-                    "model": self.model,
-                    "temperature": self.temperature,
-                }
+                try:
+                    kwargs: dict[str, Any] = {
+                        "messages": messages,
+                        "model": self.model,
+                        "temperature": self.temperature,
+                    }
 
-                if self.max_tokens:
-                    kwargs["max_tokens"] = self.max_tokens
+                    if self.max_tokens:
+                        kwargs["max_tokens"] = self.max_tokens
 
-                if tools_schema:
-                    kwargs["tools"] = tools_schema
-                    kwargs["tool_choice"] = self.tool_choice
+                    if tools_schema:
+                        kwargs["tools"] = tools_schema
+                        kwargs["tool_choice"] = self.tool_choice
 
-                stream = await client.chat(stream=True, **kwargs)
+                    self._apply_overrides(kwargs, self.request_overrides(context, turn, retry=attempt > 0) or {})
 
-                async for chunk in stream:
-                    if not chunk.choices:
-                        continue
+                    stream = await client.chat(stream=True, **kwargs)
 
-                    choice = chunk.choices[0]
-                    delta = choice.delta
+                    async for chunk in stream:
+                        if not chunk.choices:
+                            continue
 
-                    # 内容增量 - AG-UI: TEXT_MESSAGE_CONTENT
-                    if delta.content:
-                        assistant_content += delta.content
-                        yield event.text_message_content(
-                            message_id=msg_id,
-                            delta=delta.content,
-                        )
+                        choice = chunk.choices[0]
+                        delta = choice.delta
 
-                    # 工具调用
-                    if delta.tool_calls:
-                        for tool_call_delta in delta.tool_calls:
-                            idx = tool_call_delta.index  # noqa
-                            if idx not in tool_calls_buffer:
-                                tool_calls_buffer[idx] = {
-                                    "id": tool_call_delta.id or "",  # noqa
-                                    "name": "",
-                                    "arguments": "",
-                                }
-
-                            if tool_call_delta.id:  # noqa
-                                tool_calls_buffer[idx]["id"] = tool_call_delta.id  # noqa
-                            if tool_call_delta.function and tool_call_delta.function.name:  # noqa
-                                tool_calls_buffer[idx]["name"] = tool_call_delta.function.name  # noqa
-                            if tool_call_delta.function and tool_call_delta.function.arguments:  # noqa
-                                tool_calls_buffer[idx]["arguments"] += tool_call_delta.function.arguments  # noqa
-
-                    # 完成
-                    if choice.finish_reason:
-                        # AG-UI: 工具调用事件
-                        for tool_call_data in tool_calls_buffer.values():
-                            tool_calls.append(tool_call_data)
-
-                            # TOOL_CALL_START
-                            yield event.tool_call_start(
-                                tool_call_id=tool_call_data["id"],
-                                tool_call_name=tool_call_data["name"],
+                        # 内容增量 - AG-UI: TEXT_MESSAGE_CONTENT
+                        if delta.content:
+                            assistant_content += delta.content
+                            yield event.text_message_content(
+                                message_id=msg_id,
+                                delta=delta.content,
                             )
 
-                            # TOOL_CALL_ARGS
-                            yield event.tool_call_args(
-                                tool_call_id=tool_call_data["id"],
-                                delta=tool_call_data["arguments"],
-                            )
+                        # 工具调用
+                        if delta.tool_calls:
+                            for tool_call_delta in delta.tool_calls:
+                                idx = tool_call_delta.index  # noqa
+                                if idx not in tool_calls_buffer:
+                                    tool_calls_buffer[idx] = {
+                                        "id": tool_call_delta.id or "",  # noqa
+                                        "name": "",
+                                        "arguments": "",
+                                    }
 
-                            # TOOL_CALL_END
-                            yield event.tool_call_end(tool_call_id=tool_call_data["id"])
+                                if tool_call_delta.id:  # noqa
+                                    tool_calls_buffer[idx]["id"] = tool_call_delta.id  # noqa
+                                if tool_call_delta.function and tool_call_delta.function.name:  # noqa
+                                    tool_calls_buffer[idx]["name"] = tool_call_delta.function.name  # noqa
+                                if tool_call_delta.function and tool_call_delta.function.arguments:  # noqa
+                                    tool_calls_buffer[idx]["arguments"] += tool_call_delta.function.arguments  # noqa
 
-                        # 更新 usage
-                        if hasattr(chunk, "usage") and chunk.usage:
-                            context.add_usage(
-                                Usage(
-                                    prompt_tokens=chunk.usage.prompt_tokens or 0,
-                                    completion_tokens=chunk.usage.completion_tokens or 0,
-                                    total_tokens=chunk.usage.total_tokens or 0,
+                        # 完成
+                        if choice.finish_reason:
+                            # AG-UI: 工具调用事件
+                            for tool_call_data in tool_calls_buffer.values():
+                                tool_calls.append(tool_call_data)
+
+                                # TOOL_CALL_START
+                                yield event.tool_call_start(
+                                    tool_call_id=tool_call_data["id"],
+                                    tool_call_name=tool_call_data["name"],
                                 )
-                            )
 
-            except Exception as e:
-                error_msg = str(e)
-                # AG-UI: RUN_ERROR
-                yield event.run_error(message=error_msg)
-                raise FlowError("AGENT_EXECUTION_FAILED", 500, {"error": error_msg}) from e
+                                # TOOL_CALL_ARGS
+                                yield event.tool_call_args(
+                                    tool_call_id=tool_call_data["id"],
+                                    delta=tool_call_data["arguments"],
+                                )
+
+                                # TOOL_CALL_END
+                                yield event.tool_call_end(tool_call_id=tool_call_data["id"])
+
+                            # 更新 usage
+                            if hasattr(chunk, "usage") and chunk.usage:
+                                context.add_usage(
+                                    Usage(
+                                        prompt_tokens=chunk.usage.prompt_tokens or 0,
+                                        completion_tokens=chunk.usage.completion_tokens or 0,
+                                        total_tokens=chunk.usage.total_tokens or 0,
+                                    )
+                                )
+
+                except Exception as e:
+                    error_msg = str(e)
+                    # AG-UI: RUN_ERROR
+                    yield event.run_error(message=error_msg)
+                    raise FlowError("AGENT_EXECUTION_FAILED", 500, {"error": error_msg}) from e
+
+                if self.retry_empty_response and attempt == 0 and not tool_calls and not assistant_content.strip():
+                    attempt = 1
+                    continue
+                break
 
             # 保存 assistant 消息（tool_calls 转为 OpenAI 标准格式）
             if tool_calls:
