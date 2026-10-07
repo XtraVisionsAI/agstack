@@ -1,3 +1,9 @@
+## 2.4.0 (2026-10-07)
+
+### Feat
+
+- **harness**: 2.4 agent guards, event hub, projection engine and token calibration
+
 ## 2.3.0 (2026-10-07)
 
 ### Feat
