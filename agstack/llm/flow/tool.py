@@ -5,7 +5,7 @@
 import json
 import logging
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Callable
 
 
@@ -26,6 +26,8 @@ class ToolResult:
     error: str | None = None
     content: str | None = None
     summary: str | None = None
+    #: 钩子 / 工具附带的结构化信息（如 spill 落盘引用），不喂给模型
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 class Deny:
@@ -61,6 +63,10 @@ class ToolHook:
         execution_records 三个出口同时生效。抛异常记日志并放行原结果
         （fail open：审计钩子的 bug 不毁掉主流程）。
         Deny 产生的失败结果同样穿过 post 链（审计要看到被拒绝的调用）。
+
+        进入 post 链时 ``result.content``（喂给模型的字符串）已按 result_formatter 算好：
+        钩子可直接改写 content（spill / 截断）；钩子若换掉 ``result.result`` 而未动 content，
+        Tool 会按新 result 重算 content（2.3 起；2.1 的「改 result 即改 content」语义保留）。
         """
         return result
 
@@ -161,9 +167,13 @@ class Tool:
         if result is None:
             result = await self._execute(context, args)
 
+        # 先算 LLM 消费内容，post 钩子据此判定 / 改写（spill、截断看到的是模型将看到的字符串）
+        result.content = self._render_content(result)
+
         # post 钩子链（逆序）：可改写结果；抛异常＝放行原结果（fail open）。
         # Deny 的失败结果同样穿过 post 链，审计钩子能看到被拒绝的调用。
         for hook in reversed(_TOOL_HOOKS):
+            before_result, before_content = result.result, result.content
             try:
                 revised = await hook.post_execute(context, self, result)
             except Exception as e:
@@ -173,25 +183,15 @@ class Tool:
                 result = revised
             else:
                 logger.warning("Tool hook post_execute for %s returned %r, ignored", self.name, type(revised))
+                continue
+            # 钩子换了 result 却没给新 content（None 或原样）：按新 result 重算
+            # （保持 2.1「改 result 即改模型所见」语义）
+            if result.result is not before_result and (result.content is None or result.content == before_content):
+                result.content = self._render_content(result)
+        if result.content is None:
+            result.content = self._render_content(result)
 
         _duration_ms = int((time.perf_counter() - _t0) * 1000)
-
-        # 计算 LLM 消费内容
-        if self.result_formatter:
-            try:
-                result.content = self.result_formatter(result)
-            except Exception:
-                result.content = (
-                    json.dumps(result.result, ensure_ascii=False)
-                    if result.success
-                    else json.dumps({"error": result.error}, ensure_ascii=False)
-                )
-        else:
-            result.content = (
-                json.dumps(result.result, ensure_ascii=False)
-                if result.success
-                else json.dumps({"error": result.error}, ensure_ascii=False)
-            )
 
         # 生成面向用户的摘要
         if self.summary_fn:
@@ -214,6 +214,20 @@ class Tool:
         )
 
         return result
+
+    def _render_content(self, result: ToolResult) -> str:
+        """按 result_formatter（失败回退 JSON）算喂给模型的内容"""
+        fallback = (
+            json.dumps(result.result, ensure_ascii=False)
+            if result.success
+            else json.dumps({"error": result.error}, ensure_ascii=False)
+        )
+        if not self.result_formatter:
+            return fallback
+        try:
+            return self.result_formatter(result)
+        except Exception:
+            return fallback
 
     async def _execute(self, context: "FlowContext", inputs: dict[str, Any]) -> ToolResult:
         """实际执行逻辑，子类应覆写此方法"""

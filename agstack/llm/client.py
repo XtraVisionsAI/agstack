@@ -14,6 +14,7 @@ from openai.types.chat import ChatCompletionMessageParam
 
 from ..contexts import get_request_id
 from ..exceptions import AppException
+from .hooks import CallMeta, StreamSummary, has_llm_hooks, run_after_call, run_before_call
 
 
 if TYPE_CHECKING:
@@ -207,12 +208,24 @@ class LLMClient:
         model_name = model
         # 内部调用类型标记（vision 经由 chat 转发时传入，不透传给推理后端）
         usage_kind = kwargs.pop("usage_kind", "chat")
+        # 调用方附带给 LLM 钩子的上下文（Agent 传 agent / turn / retry / context），不透传给推理后端
+        hook_extra: dict[str, Any] = kwargs.pop("hook_meta", None) or {}
+        stream_kind = "chat_stream" if usage_kind == "chat" else usage_kind
+        meta = CallMeta(
+            model=model_name,
+            kind=stream_kind if stream else usage_kind,
+            stream=stream,
+            request_id=get_request_id(),
+            extra=hook_extra,
+        )
+        # F6 before 链：请求发出前改写消息；钩子异常即失败（fail closed），不包进 LLMError 以保留原异常类型
+        if has_llm_hooks():
+            messages = await run_before_call(messages, kwargs.get("tools"), meta)
 
         try:
             if stream:
-                stream_kind = "chat_stream" if usage_kind == "chat" else usage_kind
                 return self._chat_stream(
-                    messages, model_name, temperature, max_tokens, start, usage_kind=stream_kind, **kwargs
+                    messages, model_name, temperature, max_tokens, start, usage_kind=stream_kind, meta=meta, **kwargs
                 )
 
             @autoretry(
@@ -242,6 +255,8 @@ class LLMClient:
             else:
                 logger.info(f"LLM: model={model_name}, duration={duration_ms}ms")
             _emit_usage(model_name, usage_kind, usage, duration_ms)
+            if has_llm_hooks():
+                await run_after_call(response, meta)
 
             return response
 
@@ -324,10 +339,12 @@ class LLMClient:
         max_tokens: int | None,
         start_time: float,
         usage_kind: str = "chat_stream",
+        meta: CallMeta | None = None,
         **kwargs: Any,
     ) -> AsyncIterator["ChatCompletionChunk"]:
         """流式响应"""
         final_usage = None
+        finish_reason: str | None = None
 
         try:
             # noinspection PyTypeChecker
@@ -346,6 +363,8 @@ class LLMClient:
                 # 收集 token 统计（usage 通常在末尾 chunk 返回）
                 if chunk.usage:
                     final_usage = chunk.usage
+                if chunk.choices and chunk.choices[0].finish_reason:
+                    finish_reason = chunk.choices[0].finish_reason
 
                 yield chunk
 
@@ -354,6 +373,8 @@ class LLMClient:
             total_tokens = final_usage.total_tokens if final_usage else 0
             logger.info(f"LLM stream: model={model}, tokens={total_tokens}, duration={duration_ms}ms")
             _emit_usage(model, usage_kind, final_usage, duration_ms)
+            if meta is not None and has_llm_hooks():
+                await run_after_call(StreamSummary(usage=final_usage, finish_reason=finish_reason), meta)
 
         except APITimeoutError as e:
             logger.error(f"LLM stream timeout: {e}")

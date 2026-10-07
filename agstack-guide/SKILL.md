@@ -759,3 +759,4 @@ For detailed information on specific topics:
 - **[tools.md](references/tools.md)**: Complete guide to building tools
 - **[flows.md](references/flows.md)**: Complete guide to orchestrating flows
 - **[registry.md](references/registry.md)**: Complete guide to registry pattern and component lifecycle
+- **[harness.md](references/harness.md)**: Runtime ports (SessionLog / SpillStore / UsageSink / KVStore), truncation, spill hook, LLM call hooks (2.3.0+)

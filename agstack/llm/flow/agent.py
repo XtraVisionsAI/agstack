@@ -322,6 +322,8 @@ class Agent:
                         kwargs["tool_choice"] = self.tool_choice
 
                     self._apply_overrides(kwargs, self.request_overrides(context, turn, retry=attempt > 0) or {})
+                    # F6 LLM 钩子的调用方上下文（client 弹出，不透传给推理后端）
+                    kwargs["hook_meta"] = {"agent": self.name, "turn": turn, "retry": attempt > 0, "context": context}
 
                     stream = await client.chat(stream=True, **kwargs)
 

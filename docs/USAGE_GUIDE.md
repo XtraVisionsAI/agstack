@@ -371,6 +371,85 @@ context.set_node_result("step1", {"data": "result"})
 
 ---
 
+### 3.5 LLM 调用钩子（2.3.0+）
+
+registry 级全局钩子链，织入 `LLMClient.chat`（异步，含流式与 vision 转发；`chat_sync` 不穿链）。
+`before_call` 在请求发出前拿到**完整消息列表**并可改写（压缩、复用前缀、注入快照），`after_call` 在响应
+返回后观察（锚点计量、溢出判定、审计）。请求参数类覆盖（temperature / max_tokens / thinking）继续走
+`Agent.request_overrides`，两者不重叠。
+
+```python
+from agstack.llm.flow import registry
+from agstack.llm.hooks import CallMeta, LLMCallHook, StreamSummary
+
+class AnchorMeter(LLMCallHook):
+    async def before_call(self, messages, tools, meta: CallMeta):
+        return compact_if_needed(messages, meta.extra.get("context"))   # 必须返回消息列表
+
+    async def after_call(self, response, meta: CallMeta):
+        usage = response.usage                 # 非流式：openai ChatCompletion；流式：StreamSummary(usage, finish_reason)
+        record_anchor(meta.extra.get("context"), usage)
+
+registry.register_llm_hook(AnchorMeter())
+registry.register_llm_hook(Compressor(), prepend=True)   # 抢链头：before 最先改写、after 最后观察
+```
+
+语义：
+
+- `before_call` 按注册顺序、`after_call` 按逆序执行；`prepend=True` 抢占链头。
+- **before 抛异常＝本次调用失败（fail closed）**：改写消息的钩子出错时不能让模型看到半成品上下文；异常原样向上抛。
+- **after 抛异常＝记日志放行（fail open）**。
+- `CallMeta`：`model` / `kind`（chat / chat_stream / vision …）/ `stream` / `request_id` / `extra`。Agent 工具循环
+  每次请求在 `extra` 里给 `agent` / `turn` / `retry` / `context`；直接调 `client.chat` 的调用方可传 `hook_meta={...}`
+  （client 弹出，不透传后端）。
+- 未注册任何钩子时为零开销路径；`registry.clear_llm_hooks()` 清空（测试隔离）。
+
+### 3.6 harness 运行时部件（2.3.0+）
+
+`agstack.llm.harness` 收模型无关、表无关、产品无关的运行时部件；存储由应用实现端口注入。
+
+**存储端口**：agstack 只声明 Protocol，应用在进程入口注册一次。
+
+```python
+from agstack.llm.harness import register_ports, get_ports, LogEvent, SessionLog, SpillStore
+
+register_ports(session_log=PgSessionLog(), spill=FsSpillStore(), usage=usage_collector_callback)
+get_ports().spill   # 未注册的端口为 None，消费方自行降级
+```
+
+- `SessionLog`：`append(session_id, events) -> 末 seq` / `read(after_seq, limit)` / `shadow(target_seqs, by_seq, kind)` /
+  `latest_anchor`。`LogEvent{kind, role, content, metadata, seq, shadowed_by}`，kind 见 `LOG_KINDS`；重试 / 溢出恢复 /
+  折叠**不删行**，写新行并遮蔽旧行（`SHADOW_KINDS`），投影只读 `shadowed_by is None` 的行。
+- `SpillStore`：`save_text(owner, source, name, content) -> SpillRef(locator, chars, tokens, name)` / `read_text(locator,
+  offset, limit)`。locator 对模型不透明，权限与密级由实现按 `SpillOwner` 判定。
+- `UsageSink`：与 `set_usage_callback` 同一回调，`register_ports(usage=...)` 两处一致。
+- `KVStore`：可选。
+
+**截断设施**（`truncation`）：`truncate_middle(text, max_tokens, count_tokens)` 保头尾、中段换规模标注；
+`clamp_results(results, per_item_max=, total_max=, count_tokens=)` 单条截断后按低相关度整条丢弃，返回丢弃数由调用方
+显式告知模型。上限数值由应用按窗口比例给，`count_tokens` 按模型绑定（如 `functools.partial(count_tokens, model=...)`）。
+
+**spill 钩子**（`spill`）：超长工具结果落盘的 ToolHook post 钩子，`prepend=True` 挂链头。
+
+```python
+from agstack.llm.harness import SpillHook, SpillPolicy, SpillOwner
+
+policy = SpillPolicy(
+    max_inline_tokens=6000,
+    count_tokens=partial(count_tokens, model="qwen3"),
+    owner_of=lambda ctx: SpillOwner(user_id=ctx.user_id, session_id=ctx.thread_id),
+    exclude_tools=frozenset({"read_spill"}),          # 回读工具必须排除
+)
+registry.register_tool_hook(SpillHook(policy), prepend=True)
+```
+
+content 超 `max_inline_tokens` 时全文经 `SpillStore` 落盘，内联替换为头尾 + 固定格式通知（含 locator），落盘引用写进
+`ToolResult.metadata["spill"]`；未注册 SpillStore 为空操作；**存储失败只 warn 保留内联**。`result.result` 形状不变。
+
+**2.3 对 Tool post 链的语义补充**：进入 post 链时 `result.content` 已按 result_formatter 算好，钩子可直接改写
+content；钩子若换掉 `result.result` 而未给新 content，Tool 按新 result 重算（2.1 的「改 result 即改模型所见」保留）。
+`ToolResult` 新增 `metadata` 字段（钩子 / 工具附带的结构化信息，不喂给模型）。
+
 ## 4. Registry & Factory
 
 ### 4.1 Registry (注册中心)

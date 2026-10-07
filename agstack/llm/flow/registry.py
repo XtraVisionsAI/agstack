@@ -7,6 +7,7 @@ from __future__ import annotations
 import copy
 from typing import Any, cast
 
+from ..hooks import LLMCallHook, clear_llm_hooks, register_llm_hook
 from .agent import Agent
 from .tool import Tool, ToolHook, clear_tool_hooks, register_tool_hook
 
@@ -57,6 +58,17 @@ class FlowRegistry:
     def clear_tool_hooks(self) -> None:
         """清空全局工具钩子（测试隔离用）"""
         clear_tool_hooks()
+
+    def register_llm_hook(self, hook: LLMCallHook, *, prepend: bool = False) -> None:
+        """注册全局 LLM 调用钩子（F6）：before_call 按注册顺序改写消息，after_call 逆序观察
+
+        钩子链存于 ``llm.hooks``（保持 registry → hooks 单向导入），此处仅转发注册。
+        """
+        register_llm_hook(hook, prepend=prepend)
+
+    def clear_llm_hooks(self) -> None:
+        """清空全局 LLM 调用钩子（测试隔离用）"""
+        clear_llm_hooks()
 
     def register_agent(
         self, name: str, agent_class: type[Agent], *, label: str | None = None, echo: bool = False
