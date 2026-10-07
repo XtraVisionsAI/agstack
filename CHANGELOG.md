@@ -1,3 +1,9 @@
+## 2.3.0 (2026-10-07)
+
+### Feat
+
+- **harness**: add pluggable harness ports, LLM call hooks, truncation and spill
+
 ## 2.2.0 (2026-10-05)
 
 ### Feat
