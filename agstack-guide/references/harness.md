@@ -79,3 +79,24 @@ Non-streaming `after_call` receives the `ChatCompletion`; streaming receives `St
 `result.content` is rendered **before** the post chain, so hooks can rewrite what the model sees. A hook that replaces
 `result.result` without providing a new `content` gets `content` re-rendered from the new result. `ToolResult.metadata`
 is a free-form dict for hook/tool side information that is not fed to the model.
+
+## Agent guards (2.4)
+
+`agstack.llm.flow.guards`: mechanism in the library, policy in the app. `AgentGuards(capped_family, cap, checks, hint,
+count_tokens, fold_budget_ratio, fold_renderer, *_kind)` + `GuardState` (per-run counters, `cap` override) +
+`GuardedToolCalls` mixin (placed before `Agent` in the MRO). Pre-execution: duplicate call → family cap → custom
+`checks`; a hit is returned to the model as the tool message and recorded as an execution record shaped like a Tool
+call. Post-execution: `hint` appended to the tool message, oldest tool results folded when the running total exceeds
+`context_length // fold_budget_ratio` (the newest is never folded). `buffer_plan_text(events, context, agent_name=,
+closing_line=)` wraps `Agent.stream`: text that precedes a tool call becomes an `agent_plan` record instead of being
+streamed; exhausted turns / empty final turns end with `closing_line(messages)`.
+
+## Events, projection, tokens (2.4)
+
+- `EventHub(persist=, replay=, is_finished=)`: per-task monotonic sequence, `TaskSnapshot`, in-process subscribers
+  (class-level, shared across instances), `publish()` and `stream(after_seq)` (replay then live, stops on
+  RUN_FINISHED / RUN_ERROR). `filter_user_event(evt, tool_label=)` is the flow-event → user-event rule table.
+- `Projection(event_of=, project_event=, event_skipper=, rewrite=, notes=)`.`project(rows)`: drops shadowed rows,
+  projects event rows, rewrites bodies, attaches notes, merges consecutive same-role messages. `select_recent(rows,
+  limit, is_dialogue_grade)` picks the window newest-first.
+- `tokens`: `clamp_ratio`, `calibration_from_samples`, `calibration_sample`, `CalibratedCounter`, `anchored_estimate`.

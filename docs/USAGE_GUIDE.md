@@ -450,6 +450,73 @@ content 超 `max_inline_tokens` 时全文经 `SpillStore` 落盘，内联替换�
 content；钩子若换掉 `result.result` 而未给新 content，Tool 按新 result 重算（2.1 的「改 result 即改模型所见」保留）。
 `ToolResult` 新增 `metadata` 字段（钩子 / 工具附带的结构化信息，不喂给模型）。
 
+### 3.7 守卫、事件、投影与计量（2.4.0+）
+
+**AgentGuards**（`agstack.llm.flow.guards`）：工具调用的「红线在代码」层，机制在库、策略在应用。
+
+```python
+from agstack.llm.flow import AgentGuards, GuardState, GuardedToolCalls, buffer_plan_text
+
+GUARDS = AgentGuards(
+    capped_family=("retrieval", "web_search"), cap=5,        # 受上限的工具族与上限
+    checks=(kb_first,),                                       # 应用自定义执行前守卫：(state, name, args) -> (kind, payload) | None
+    hint=sufficiency_hint,                                    # 结果末尾附提示：(state, name, content) -> str | None
+    count_tokens=count_tokens, fold_budget_ratio=3,           # 工具结果累计 > context_length // 3 时折叠最早一条
+    fold_renderer=render_digest,                              # (context, content) -> 折叠后文本
+    cap_kind="guard_retrieval_cap",                           # 守卫动作写执行记录时的 tool_name（审计呈现）
+)
+
+class MyAgent(GuardedToolCalls, Agent):                       # mixin 必须在 Agent 之前
+    def __init__(self, **kw):
+        self.guards, self.guard = GUARDS, GuardState()
+        super().__init__(name="a", instructions="...", **kw)
+
+    async def stream(self, context, inputs=None):
+        self.guard.reset()                                    # 每次运行重置计数；guard.cap 可按次覆盖上限
+        async for evt in buffer_plan_text(super().stream(context, inputs), context, agent_name=self.name,
+                                          closing_line=my_closing_line):
+            yield evt
+```
+
+执行前：重复调用（同名同参，参数 JSON 规范化比较）→ 工具族上限 → 自定义 checks，命中即把 payload 作为 tool 消息退给
+模型并写一条与 Tool 管线同形的执行记录（`tool_name` 为守卫种类）；执行后：附提示、按预算折叠（最新一条永不折叠，
+`_folded` 标记不重复处理）。`buffer_plan_text` 按轮缓冲助手文字：轮以工具调用结束的文字记为 `agent_plan` 执行记录
+不放流（超过 `buffer_chars` 后实时放流），轮次耗尽或末轮无文字按 `closing_line(messages)` 收尾并改写输出 `result`。
+
+**EventHub**（`agstack.llm.harness.events`）：任务事件的序号 / 快照 / 订阅 / 重放。持久化不走端口，由应用注入三个协程：
+
+```python
+from agstack.llm.harness import EventHub, filter_user_event
+
+hub = EventHub(persist=save_event, replay=load_events, is_finished=task_done)   # (task_id, seq, evt) / (task_id, after_seq) / (task_id)
+hub.begin(task_id)
+async for evt in flow.stream(context):
+    user_evt = filter_user_event(evt, tool_label=registry.get_tool_label)    # 规则表：_echo / _label / CUSTOM / RUN_*
+    if user_evt is not None:
+        await hub.publish(task_id, user_evt)                                  # 序号 → persist → 快照 → 订阅者
+hub.end(task_id)
+# SSE 重连
+async for evt in hub.stream(task_id, after_seq=n): ...                        # replay 后接实时，终止事件即止
+```
+
+订阅者 / 快照 / 序号是进程级状态，同进程内任意 `EventHub()` 实例共享。
+
+**Projection**（`agstack.llm.harness.projection`）：日志行 → 模型历史，行形状与 `LogEvent` 同（ORM 行直接可用）。
+
+```python
+from agstack.llm.harness import Projection, select_recent
+
+proj = Projection(event_of=..., project_event=..., event_skipper=..., rewrite=..., notes=...)
+history = proj.project(select_recent(rows_newest_first, limit, is_dialogue_grade))
+```
+
+遮蔽行（`shadowed_by` 非空）一律过滤；事件行按 `project_event` 投影或丢弃，`event_skipper(rows)` 用整批行构造跨行判定；
+`rewrite(role, content, metadata)` 改写正文；`notes(role, metadata)` 附带 system note；末尾连续同角色 user / assistant 合并。
+
+**tokens**（`agstack.llm.harness.tokens`）：`clamp_ratio(estimated, actual, bounds=(0.8, 1.5))`、
+`calibration_from_samples(samples, model)`（取第一条同模型有效样本）、`calibration_sample(...)`、
+`CalibratedCounter(count_tokens, model, ratio)`、`anchored_estimate(anchor, tail_tokens, fallback_tokens=)`。
+
 ## 4. Registry & Factory
 
 ### 4.1 Registry (注册中心)

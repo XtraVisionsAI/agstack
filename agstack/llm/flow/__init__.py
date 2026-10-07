@@ -17,6 +17,7 @@ from .exceptions import (
 )
 from .factory import create_agent, create_tool
 from .flow import Flow
+from .guards import AgentGuards, GuardedToolCalls, GuardState, buffer_plan_text
 from .loader import FlowLoader
 from .nodes import NodeHandler
 from .records import Record, Status
@@ -35,6 +36,10 @@ __all__ = [
     "ToolHook",
     "Deny",
     "Agent",
+    "AgentGuards",
+    "GuardState",
+    "GuardedToolCalls",
+    "buffer_plan_text",
     "Flow",
     "FlowContext",
     "Usage",
