@@ -100,7 +100,9 @@ streamed; exhausted turns / empty final turns end with `closing_line(messages)`.
 - `Projection(event_of=, project_event=, event_skipper=, rewrite=, notes=)`.`project(rows)`: drops shadowed rows,
   projects event rows, rewrites bodies, attaches notes, merges consecutive same-role messages. `select_recent(rows,
   limit, is_dialogue_grade)` picks the window newest-first.
-- `tokens`: `clamp_ratio`, `calibration_from_samples`, `calibration_sample`, `CalibratedCounter`, `anchored_estimate`.
+- `tokens`: `clamp_ratio`, `calibration_from_samples`, `calibration_sample`, `CalibratedCounter`, `anchored_estimate`;
+  3.2 model-level `ModelCalibration` (`ratio × estimated + overhead`, EMA, persisted by the app), `update_calibration`,
+  `calibration_from_pair` (two probe sizes solve both terms), `bounds_for(exact)` → (0.9, 1.1) / (0.5, 2.0).
 
 ## Overflow recovery (3.0)
 
@@ -154,4 +156,7 @@ The generative-AI layers live under `agstack.genai` with one-way dependencies: `
 runtime (depends on llm and flow). The 2.x paths `agstack.llm`, `agstack.llm.flow` and `agstack.llm.harness` are gone — a
 breaking change shipped with the major, no aliases. `LLMCallHook` stays in `agstack.genai.llm.hooks` (the client weaves it in
 and must not depend on harness) and is re-exported from `agstack.genai.harness`. `harness.tokens` is renamed
-`harness.metering` (calibration and anchors), distinct from `llm.token` (tiktoken counting).
+`harness.metering` (calibration and anchors), distinct from `llm.token` (counting). 3.2: `llm.token` is a per-model
+tokenizer registry — `register_tokenizer(model, TiktokenTokenizer(encoding) | HFTokenizer(path) | ApproxTokenizer())`,
+`tokenizer_for(model)`, `set_default_tokenizer`; `count_tokens(text, model)` keeps its signature and dispatches
+(unregistered models keep the 3.1 cl100k fallback). `HFTokenizer` needs the `agstack[tokenizers]` extra.

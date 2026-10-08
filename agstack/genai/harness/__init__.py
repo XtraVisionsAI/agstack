@@ -11,7 +11,7 @@
   事件」过滤规则表；
 - :mod:`.projection`（2.4）：「日志 → 模型历史」投影引擎（遮蔽过滤 / 事件投影 / 正文改写 / 注记 / 同角色合并，
   规则由应用给）；
-- :mod:`.metering`（2.4，原 tokens）：估算校准（实报 / 估算钳制）与锚点增量计量；
+- :mod:`.metering`（2.4，原 tokens）：估算校准（实报 / 估算钳制）与锚点增量计量；3.2 加模型级 ``ModelCalibration``；
 - :mod:`.context`（3.0）：对话上下文压缩引擎 ContextEngine（预算分层 / 快速路径 / 锚点计量 / 摘要消费与后台刷新 /
   两遍装填），历史来源与摘要存取经 HistorySource / SummaryStore 由应用实现；
 - :mod:`.overflow`（3.0）：上下文溢出三态判定与 ``OverflowPolicy``（``Agent.stream`` 命中后调应用的压缩协程并
@@ -38,7 +38,19 @@ from .context import (
     schedule_once,
 )
 from .events import EventHub, TaskSnapshot, filter_user_event
-from .metering import CalibratedCounter, anchored_estimate, calibration_from_samples, calibration_sample, clamp_ratio
+from .metering import (
+    APPROX_RATIO_BOUNDS,
+    EXACT_RATIO_BOUNDS,
+    CalibratedCounter,
+    ModelCalibration,
+    anchored_estimate,
+    bounds_for,
+    calibration_from_pair,
+    calibration_from_samples,
+    calibration_sample,
+    clamp_ratio,
+    update_calibration,
+)
 from .overflow import (
     OVERFLOW_ERROR,
     OVERFLOW_LENGTH,
@@ -101,7 +113,10 @@ __all__ = [
     "OVERFLOW_LENGTH",
     "OVERFLOW_RECORD",
     "OVERFLOW_SILENT",
+    "APPROX_RATIO_BOUNDS",
+    "EXACT_RATIO_BOUNDS",
     "CalibratedCounter",
+    "ModelCalibration",
     "EventHub",
     "OverflowPolicy",
     "Projection",
@@ -109,8 +124,11 @@ __all__ = [
     "usage_tokens",
     "TaskSnapshot",
     "anchored_estimate",
+    "bounds_for",
+    "calibration_from_pair",
     "calibration_from_samples",
     "calibration_sample",
+    "update_calibration",
     "clamp_ratio",
     "filter_user_event",
     "is_shadowed",

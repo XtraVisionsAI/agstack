@@ -512,7 +512,8 @@ history = proj.project(select_recent(rows_newest_first, limit, is_dialogue_grade
 
 **tokens**（`agstack.genai.harness.metering`）：`clamp_ratio(estimated, actual, bounds=(0.8, 1.5))`、
 `calibration_from_samples(samples, model)`（取第一条同模型有效样本）、`calibration_sample(...)`、
-`CalibratedCounter(count_tokens, model, ratio)`、`anchored_estimate(anchor, tail_tokens, fallback_tokens=)`。
+`CalibratedCounter(count_tokens, model, ratio, overhead=0)`（3.2 加 `.request(messages)` = `.messages()` + 每请求开销）、
+`anchored_estimate(anchor, tail_tokens, fallback_tokens=)`。模型级校准见 §3.12。
 
 ### 3.8 上下文溢出恢复（3.0+）
 
@@ -612,6 +613,50 @@ state.phase, state.state, state.after, state.orphan_tool_calls   # 最后阶段 
   （`code="Interrupted"`，带 `phase` 与孤儿数）；全部带 `metadata.synthetic=True`（`is_synthetic`）。
 - `EventHub.resume(task_id, next_seq)`：本进程未开始过的任务续上序号（接管时从存储取 `max(seq)+1`），已在跑的不倒拨；
   `next_sequence(task_id)` 查看。
+
+### 3.12 按模型分词器与模型级校准（3.2+）
+
+**问题**：`count_tokens(text, model)` 此前对模型名调 `tiktoken.encoding_for_model`，不认识的名字一律回退 `cl100k_base`，
+非 OpenAI 模型（Qwen / Claude / DeepSeek …）全按 GPT-4 词表数，中文偏差常见 20% 到 40%。
+
+**分词器注册表**（`agstack.genai.llm.token`）：`count_tokens` 签名不变，内部按模型名分派——
+
+```python
+from agstack.genai.llm.token import (
+    ApproxTokenizer, HFTokenizer, TiktokenTokenizer, tiktoken_tokenizer,
+    register_tokenizer, set_default_tokenizer, tokenizer_for, count_tokens,
+)
+
+register_tokenizer("qwen3", HFTokenizer("/models/tokenizers/qwen3"))        # 本地 tokenizer.json（agstack[tokenizers]）
+register_tokenizer("gpt-4o", tiktoken_tokenizer("o200k_base"))              # 按编码名，不再按模型名猜
+register_tokenizer("claude-sonnet", ApproxTokenizer(cjk_chars_per_token=1.3, name="claude"))   # 闭源：近似 + 校准
+set_default_tokenizer(None)                                                 # 未注册模型沿用 3.1 行为（cl100k 回退）
+
+tokenizer_for("qwen3").exact      # True：真实分词器；ApproxTokenizer.exact 为 False
+count_tokens("……", "qwen3")       # 经注册表；≥64 字符的文本走 (分词器, 文本) LRU，装填两遍不重复编码
+```
+
+`HFTokenizer` 只数 ids、不加特殊 token；`ApproxTokenizer` 缺省比例偏保守（估算偏大 → 少装而非超限）。
+分词器文件的交付与路径由应用定（随模型目录离线交付）。
+
+**模型级校准**（`agstack.genai.harness.metering`）：`actual ≈ ratio × estimated + overhead`，按模型持久化、叠在任何分词器之上——
+
+```python
+from agstack.genai.harness import ModelCalibration, update_calibration, calibration_from_pair, bounds_for, CalibratedCounter
+
+cal = ModelCalibration.from_dict(stored, model="qwen3", exact=tokenizer_for("qwen3").exact)   # 冷：ratio 1.0 / samples 0
+cal = update_calibration(cal, estimated=est, actual=usage.prompt_tokens)     # 每次运行吸收一条；首样本直取，之后 EMA(alpha=0.3)
+cal = calibration_from_pair("qwen3", short=(e1, a1), long=(e2, a2), exact=True)   # 冷启动探针：两份长度解出两项
+store(cal.to_dict())
+
+bounds_for(exact=True)   # (0.9, 1.1)：精确分词器只剩 chat template / 工具声明固定项
+bounds_for(exact=False)  # (0.5, 2.0)：闭源模型词表压缩率未知
+counter = CalibratedCounter.from_calibration(count_tokens, cal)
+counter.request(messages)   # messages(...) + cal.overhead
+```
+
+单样本不能同时解出两项，`update_calibration` 按坐标下降（先用现 overhead 定比值，再用新比值定残差）；
+`overhead` 非负且 ≤ `OVERHEAD_CAP`（4096）。话题级 `calibration_from_samples` 保留，应用可作短期微调。
 
 ## 4. Registry & Factory
 

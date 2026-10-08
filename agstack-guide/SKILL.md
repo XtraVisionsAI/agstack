@@ -759,4 +759,4 @@ For detailed information on specific topics:
 - **[tools.md](references/tools.md)**: Complete guide to building tools
 - **[flows.md](references/flows.md)**: Complete guide to orchestrating flows
 - **[registry.md](references/registry.md)**: Complete guide to registry pattern and component lifecycle
-- **[harness.md](references/harness.md)**: Runtime ports (SessionLog / SpillStore / UsageSink / KVStore), truncation, spill hook, LLM call hooks (2.3.0+); agent guards, EventHub, Projection, token calibration (2.4.0+); overflow recovery, context engine (3.0); replay / crash takeover, session = one run (3.1)
+- **[harness.md](references/harness.md)**: Runtime ports (SessionLog / SpillStore / UsageSink / KVStore), truncation, spill hook, LLM call hooks (2.3.0+); agent guards, EventHub, Projection, token calibration (2.4.0+); overflow recovery, context engine (3.0); replay / crash takeover, session = one run (3.1); per-model tokenizer registry + model-level calibration (3.2)
