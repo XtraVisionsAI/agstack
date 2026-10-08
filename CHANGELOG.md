@@ -1,3 +1,9 @@
+## 3.2.0 (2026-10-08)
+
+### Feat
+
+- **genai**: per-model tokenizer registry and model-level token calibration (3.2)
+
 ## 3.1.0 (2026-10-08)
 
 ### Feat
