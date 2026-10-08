@@ -1,3 +1,9 @@
+## 3.1.0 (2026-10-08)
+
+### Feat
+
+- **harness**: 3.1 log replay and crash takeover — SessionLog as one run, harness.replay phase markers / reader repair, EventHub sequence resume
+
 ## 3.0.0 (2026-10-07)
 
 ### BREAKING CHANGE
