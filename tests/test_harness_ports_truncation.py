@@ -28,11 +28,8 @@ class _Log:
     async def append(self, session_id, events):
         return 0
 
-    async def read(self, session_id, *, after_seq=0, limit=None):
+    async def read(self, session_id, *, after_seq=-1, limit=None):
         return []
-
-    async def shadow(self, session_id, target_seqs, by_seq, kind):
-        return None
 
     async def latest_anchor(self, session_id):
         return None

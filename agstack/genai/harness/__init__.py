@@ -15,7 +15,9 @@
 - :mod:`.context`（3.0）：对话上下文压缩引擎 ContextEngine（预算分层 / 快速路径 / 锚点计量 / 摘要消费与后台刷新 /
   两遍装填），历史来源与摘要存取经 HistorySource / SummaryStore 由应用实现；
 - :mod:`.overflow`（3.0）：上下文溢出三态判定与 ``OverflowPolicy``（``Agent.stream`` 命中后调应用的压缩协程并
-  同轮重发一次）。
+  同轮重发一次）；
+- :mod:`.replay`（3.1）：日志回放重建与崩溃接管的读方修复——阶段标记 / 失败尝试事件、``recover`` 阅读一次运行的
+  日志、``closers`` 合成闭合事件；``SessionLog`` 的 session 自 3.1 起定为一次运行（任务），seq 即 EventHub 序号。
 
 LLM 调用钩子 :mod:`agstack.genai.llm.hooks`（F6）留在 llm 包——它织入 LLMClient，client 不能反向依赖 harness——
 这里重导出。Agent 守卫机制（AgentGuards）在 :mod:`agstack.genai.flow.guards`。
@@ -62,6 +64,20 @@ from .ports import (
     register_ports,
 )
 from .projection import Projection, is_shadowed, merge_consecutive, select_recent
+from .replay import (
+    ORPHAN_STARTED,
+    ORPHAN_UNRECORDED,
+    REASON_INTERRUPTED,
+    OrphanCall,
+    RecoveryState,
+    attempt,
+    closers,
+    is_synthetic,
+    phase_marker,
+    recover,
+    tool_call,
+    tool_result,
+)
 from .spill import SpillHook, SpillPolicy
 from .truncation import clamp_results, truncate_middle
 
@@ -100,6 +116,18 @@ __all__ = [
     "is_shadowed",
     "merge_consecutive",
     "select_recent",
+    "ORPHAN_STARTED",
+    "ORPHAN_UNRECORDED",
+    "REASON_INTERRUPTED",
+    "OrphanCall",
+    "RecoveryState",
+    "attempt",
+    "closers",
+    "is_synthetic",
+    "phase_marker",
+    "recover",
+    "tool_call",
+    "tool_result",
     "KVStore",
     "LogEvent",
     "Ports",

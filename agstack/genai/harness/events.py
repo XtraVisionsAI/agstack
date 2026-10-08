@@ -124,6 +124,18 @@ class EventHub:
         """任务结束：丢快照（序号保留到进程结束无妨）"""
         self._snapshots.pop(task_id, None)
 
+    def resume(self, task_id: UUID, next_seq: int) -> None:
+        """本进程未开始过的任务续上序号（崩溃接管 / 跨进程补写；3.1）
+
+        只在本进程没有该任务计数时生效：已在跑的任务不被外部读到的旧值倒拨。不建快照（接管不是在跑）。
+        """
+        if task_id not in self._sequences:
+            self._sequences[task_id] = max(int(next_seq), 0)
+
+    def next_sequence(self, task_id: UUID) -> int | None:
+        """本进程将分配给该任务的下一个序号；本进程没见过该任务为 None"""
+        return self._sequences.get(task_id)
+
     def snapshot(self, task_id: UUID) -> TaskSnapshot | None:
         return self._snapshots.get(task_id)
 

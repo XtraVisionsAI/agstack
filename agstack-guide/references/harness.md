@@ -1,4 +1,4 @@
-# Harness Runtime (2.3.0+)
+# Harness Runtime (2.3.0+, replay 3.1)
 
 `agstack.genai.harness` collects runtime pieces that are model-, table- and product-agnostic. Storage is injected by the
 application through ports; agstack itself never touches a database or file system.
@@ -14,13 +14,14 @@ get_ports().spill          # None when not registered — consumers degrade grac
 
 | Port | Methods | Notes |
 |---|---|---|
-| `SessionLog` | `append(session_id, events) -> last seq`, `read(session_id, after_seq=, limit=)`, `shadow(session_id, target_seqs, by_seq, kind)`, `latest_anchor(session_id)` | Append-only log. Retries / overflow recovery / folds never delete rows: write a new event and shadow the old one (`SHADOW_KINDS`). Projections read only `shadowed_by is None`. |
+| `SessionLog` | `append(session_id, events) -> last seq`, `read(session_id, after_seq=-1, limit=)` (events with `seq > after_seq`), `latest_anchor(session_id)` | Append-only log of **one run** (`session_id` is the task id since 3.1); `seq` is the EventHub sequence of that run — no clock, no cross-process contention. Retries / overflow recovery / folds never delete rows: write a new row and shadow the old one in the application's own table (`SHADOW_KINDS` is shared vocabulary; the port has no `shadow` method since 3.1). Projections read only `shadowed_by is None`. |
 | `SpillStore` | `save_text(owner, source, name, content) -> SpillRef`, `read_text(locator, offset=, limit=)` | `locator` is opaque to the model; permissions belong to the implementation. |
 | `UsageSink` | callable `(UsageEvent) -> None` | Same callback as `set_usage_callback`; `register_ports(usage=...)` keeps both in sync. |
 | `KVStore` | `get(scope, key)`, `put(scope, key, value)` | Optional. |
 
-`LogEvent{kind, role, content, metadata, seq, shadowed_by}`; `kind` ∈ `LOG_KINDS` (message, event, tool_call, tool_result,
-summary, fold, attempt, system_snapshot, phase_marker). `clear_ports()` resets everything (tests).
+`LogEvent{kind, role, content, metadata, seq, shadowed_by: str | None}`; `kind` ∈ `LOG_KINDS` (message, event, tool_call,
+tool_result, summary, fold, attempt, system_snapshot, phase_marker). `TokenAnchor{anchor_ref, prompt_tokens, model}` locates
+the anchor by a row reference (usually a message id). `clear_ports()` resets everything (tests).
 
 ## Truncation
 
@@ -131,6 +132,20 @@ The application implements `HistorySource` (`recent(limit) -> (window asc, super
 the summary, `previous` = old content) once `incremental_threshold` new rows accumulate. `schedule_once(key, factory)` is
 the default scheduler (per-key dedup, empty `contextvars.Context`); `fill_to_budget(messages, budget, count,
 user_ratio=)` is the two-pass fill (users first) usable on its own.
+
+## Replay and crash takeover (3.1)
+
+`agstack.genai.harness.replay` replaces "serialize the FlowContext" with "serialize the events that produced it". Long
+jobs append `phase_marker(phase, state)` at phase boundaries and `attempt(reason, detail=)` for failed tries (kept for
+audit, never projected into history). After a crash the reader calls `recover(events, pending_tool_calls=)` on the run's
+log: it yields `RecoveryState{phase, state, marker_seq, last_seq, after, orphan_tool_calls, attempts, closed}` — the last
+marker and its state, the events after it, `tool_call` rows without a matching `tool_result` (`ORPHAN_STARTED`) and
+checkpoint-pending call ids with no start row (`ORPHAN_UNRECORDED`). `closers(state, reason=)` synthesizes one
+`tool_result` error per orphan (the message tells the model whether the tool may already have run) plus a final
+`RUN_ERROR{code: Interrupted, phase, orphan_tool_calls}`, all flagged `metadata.synthetic` (`is_synthetic`); a run that
+already has `RUN_FINISHED / RUN_ERROR` is `closed` and gets no closers. Writers never truncate or rewrite; repair happens
+only on the read side and is appended as ordinary events. `EventHub.resume(task_id, next_seq)` seeds the sequence for a
+task this process never began (take `max(seq)+1` from storage) without rewinding a running one.
 
 ## Package layout since 3.0
 

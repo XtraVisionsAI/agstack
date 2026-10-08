@@ -411,9 +411,12 @@ register_ports(session_log=PgSessionLog(), spill=FsSpillStore(), usage=usage_col
 get_ports().spill   # 未注册的端口为 None，消费方自行降级
 ```
 
-- `SessionLog`：`append(session_id, events) -> 末 seq` / `read(after_seq, limit)` / `shadow(target_seqs, by_seq, kind)` /
-  `latest_anchor`。`LogEvent{kind, role, content, metadata, seq, shadowed_by}`，kind 见 `LOG_KINDS`；重试 / 溢出恢复 /
-  折叠**不删行**，写新行并遮蔽旧行（`SHADOW_KINDS`），投影只读 `shadowed_by is None` 的行。
+- `SessionLog`：`append(session_id, events) -> 末 seq` / `read(after_seq=-1, limit)`（`seq > after_seq`）/ `latest_anchor`。
+  **3.1 起 `session_id` 是一次运行（任务）**，`seq` 即应用事件枢纽（EventHub）在该运行内分配的单调序号，不依赖时钟、
+  无跨进程冲突；话题级消息顺序与遮蔽都在应用自己的表上做，端口不再声明 `shadow`（`SHADOW_KINDS` 仍是共享的原因词汇）。
+  `LogEvent{kind, role, content, metadata, seq, shadowed_by: str | None}`，kind 见 `LOG_KINDS`；重试 / 溢出恢复 /
+  折叠**不删行**，写新行并遮蔽旧行，投影只读 `shadowed_by is None` 的行。`TokenAnchor{anchor_ref, prompt_tokens, model}`
+  以行引用（通常是消息 id）定位锚点。
 - `SpillStore`：`save_text(owner, source, name, content) -> SpillRef(locator, chars, tokens, name)` / `read_text(locator,
   offset, limit)`。locator 对模型不透明，权限与密级由实现按 `SpillOwner` 判定。
 - `UsageSink`：与 `set_usage_callback` 同一回调，`register_ports(usage=...)` 两处一致。
@@ -579,6 +582,36 @@ span = engine.history_span               # 快速路径整窗送出时的行跨�
 `agstack.llm.flow`、`agstack.llm.harness` 已移除，不留别名（破坏性变更随 major 发布，下游一次改完）。`LLMCallHook`
 留在 `agstack.genai.llm.hooks`（client 织入它，不能反向依赖 harness），`agstack.genai.harness` 重导出。
 `harness.tokens` 改名 `harness.metering`（校准与锚点计量），与 `llm.token`（tiktoken 计数）区分。
+
+### 3.11 日志回放与崩溃接管（3.1+）
+
+`agstack.genai.harness.replay`：F1「FlowContext 序列化」换成「序列化产生它的事件」。长作业在阶段边界写阶段标记，
+失败的尝试写 `attempt`；进程崩溃后读方从该运行的日志阅读出恢复状态并合成闭合事件追加回去，运行以可解释的终态收口。
+写方不截断、不回写，修复只在读方（dsh 纪律）。
+
+```python
+from agstack.genai.harness import get_ports, phase_marker, attempt, tool_call, tool_result, recover, closers
+
+log = get_ports().session_log
+await log.append(task_id, [phase_marker("render", {"flow_name": "report", "title": "季度简报"})])   # 阶段边界
+await log.append(task_id, [attempt("overflow", detail={"turn": 3})])                                 # 失败尝试留痕
+
+# 崩溃接管（启动时 / 读到陈旧 running 任务时）
+events = await log.read(task_id)                      # 应用把事件行映射为 LogEvent：tool_call / tool_result / phase_marker / event
+state = recover(events, pending_tool_calls=state_from_checkpoint.get("pending", ()))
+if state.needs_repair:
+    await log.append(task_id, closers(state, reason="启动接管：进程中断"))
+state.phase, state.state, state.after, state.orphan_tool_calls   # 最后阶段 / 其状态 / 其后事件 / 孤儿工具调用
+```
+
+- `recover(events, pending_tool_calls=)`：最后一个 `phase_marker` 决定 `phase / state / marker_seq / after`；`tool_call`
+  没有同 `call_id` 的 `tool_result` 为孤儿（`ORPHAN_STARTED`）；检查点里待执行而日志无开始记录的为 `ORPHAN_UNRECORDED`；
+  日志里已有 `RUN_FINISHED / RUN_ERROR` 事件即 `closed`，不需修复。
+- `closers(state, reason=, message_started=, message_unrecorded=)`：每个孤儿一条合成 `tool_result` 错误（JSON
+  `{"error", "orphan"}`，文案区分「可能已执行，按幂等性决定是否重试」与「未执行，可安全重试」）+ 一条 `RUN_ERROR`
+  （`code="Interrupted"`，带 `phase` 与孤儿数）；全部带 `metadata.synthetic=True`（`is_synthetic`）。
+- `EventHub.resume(task_id, next_seq)`：本进程未开始过的任务续上序号（接管时从存储取 `max(seq)+1`），已在跑的不倒拨；
+  `next_sequence(task_id)` 查看。
 
 ## 4. Registry & Factory
 

@@ -7,7 +7,14 @@ agstack 只声明 Protocol 与数据类型，不含任何存储实现；应用�
 用量汇、可选 KV。
 
 ``LogEvent`` 借「仅追加日志 + 投影」思路但不做事件溯源：``kind`` 取值见 :data:`LOG_KINDS`；被重试 / 溢出恢复 / 折叠
-取代的行不删，由 ``shadowed_by`` 指向取代它的事件序号，投影只消费 ``shadowed_by is None`` 的行。
+取代的行不删，由 ``shadowed_by`` 指向取代它的行（应用自定引用：行 id 或序号的字符串），投影只消费
+``shadowed_by is None`` 的行。
+
+**seq 口径（3.1 裁定）**：``SessionLog`` 的 ``session_id`` 是**一次运行**（应用里的任务 / run），不是对话话题；``seq``
+是该运行内由应用的事件枢纽（:class:`~agstack.genai.harness.events.EventHub`）分配的单调序号——一次运行只在一个进程内
+执行，序号天然无跨进程冲突，也不依赖时钟。话题级的消息顺序由应用自己的表承担（如按写入时间），不进这个端口；
+遮蔽同理在应用的消息表上做（``SHADOW_KINDS`` 只是共享的原因词汇），端口不再声明 ``shadow``。
+回放重建与崩溃接管的读方修复在 :mod:`agstack.genai.harness.replay`。
 """
 
 from collections.abc import Callable, Sequence
@@ -35,8 +42,8 @@ class LogEvent:
     :param role: 可投影为模型消息时的角色（system / user / assistant / tool / event），否则 None
     :param content: 正文（消息文本 / 工具结果 / 摘要）
     :param metadata: 结构化附带（tool_calls、tool_call_id、来源、锚点等）
-    :param seq: 会话内单调序号，append 时由实现分配
-    :param shadowed_by: 遮蔽它的事件序号（None 为有效行）
+    :param seq: 运行内单调序号，append 时由实现分配（读回时必有）
+    :param shadowed_by: 遮蔽它的行的引用（应用自定：行 id / 序号的字符串；None 为有效行）
     """
 
     kind: str
@@ -44,14 +51,17 @@ class LogEvent:
     content: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
     seq: int | None = None
-    shadowed_by: int | None = None
+    shadowed_by: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class TokenAnchor:
-    """上一次真实请求的 token 锚点：历史主体用锚点值，只对锚点之后的新增内容做估算"""
+    """上一次真实请求的 token 锚点：历史主体用锚点值，只对锚点之后的新增内容做估算
 
-    seq: int
+    :param anchor_ref: 锚点所在行的引用（应用自定，通常是历史末行的 id；3.1 起不再是 seq——锚点落在话题级消息上）
+    """
+
+    anchor_ref: str
     prompt_tokens: int
     model: str
 
@@ -87,22 +97,18 @@ class SpillRef:
 
 @runtime_checkable
 class SessionLog(Protocol):
-    """会话日志端口"""
+    """运行日志端口（``session_id`` = 一次运行的任务 id）"""
 
     async def append(self, session_id: UUID, events: Sequence[LogEvent]) -> int:
-        """追加事件，返回末 seq"""
+        """追加事件，返回末 seq（实现分配序号；本进程未开始过该运行时须先从存储续上序号）"""
         ...
 
-    async def read(self, session_id: UUID, *, after_seq: int = 0, limit: int | None = None) -> Sequence[LogEvent]:
-        """按 seq 升序读取（含被遮蔽行，投影方自行过滤）"""
-        ...
-
-    async def shadow(self, session_id: UUID, target_seqs: Sequence[int], by_seq: int, kind: str) -> None:
-        """把 target_seqs 标为被 by_seq 遮蔽；kind ∈ SHADOW_KINDS"""
+    async def read(self, session_id: UUID, *, after_seq: int = -1, limit: int | None = None) -> Sequence[LogEvent]:
+        """按 seq 升序读取 ``seq > after_seq`` 的事件（缺省全部；含被遮蔽行，投影方自行过滤）"""
         ...
 
     async def latest_anchor(self, session_id: UUID) -> TokenAnchor | None:
-        """最近一次 token 锚点"""
+        """该运行所属话题最近一次 token 锚点（无话题 / 无锚点为 None）"""
         ...
 
 

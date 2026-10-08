@@ -211,7 +211,9 @@ def anchored_history_tokens(
     tail_rows = list(selected[last_idx + 1 :])
     tail_tokens = messages_tokens(project(tail_rows), count) if tail_rows else 0
     base = TokenAnchor(
-        seq=last_idx, prompt_tokens=max(int(anchor.get("history_tokens") or 0) - dropped_tokens, 0), model=model
+        anchor_ref=str(last_id),
+        prompt_tokens=max(int(anchor.get("history_tokens") or 0) - dropped_tokens, 0),
+        model=model,
     )
     return anchored_estimate(base, tail_tokens, fallback_tokens=fallback)
 

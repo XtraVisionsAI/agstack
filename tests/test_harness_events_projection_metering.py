@@ -234,5 +234,6 @@ def test_calibrated_counter_and_anchor():
     assert counter("abcd") == 6
     assert counter.messages([{"content": "ab"}, {"content": None}], overhead_per_message=1) == (3 + 1) + (0 + 1)
     assert anchored_estimate(None, 10, fallback_tokens=99) == 99
-    assert anchored_estimate(TokenAnchor(seq=5, prompt_tokens=1000, model="m"), 10, fallback_tokens=99) == 1010
-    assert anchored_estimate(TokenAnchor(seq=5, prompt_tokens=1000, model="m"), -3, fallback_tokens=99) == 1000
+    anchor = TokenAnchor(anchor_ref="r5", prompt_tokens=1000, model="m")
+    assert anchored_estimate(anchor, 10, fallback_tokens=99) == 1010
+    assert anchored_estimate(anchor, -3, fallback_tokens=99) == 1000
