@@ -1,3 +1,16 @@
+## 3.0.0 (2026-10-07)
+
+### BREAKING CHANGE
+
+- agstack.llm / agstack.llm.flow / agstack.llm.harness are removed with no aliases.
+The three layers become agstack.genai.llm (model access) / agstack.genai.flow (orchestration) /
+agstack.genai.harness (runtime), with one-way dependency llm ← flow ← harness;
+harness.tokens is renamed harness.metering.
+
+### Feat
+
+- **genai**: 3.0 package reorganisation into agstack.genai.{llm,flow,harness}, overflow recovery and context engine
+
 ## 2.4.0 (2026-10-07)
 
 ### Feat
