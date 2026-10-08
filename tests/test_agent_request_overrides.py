@@ -2,9 +2,9 @@
 
 from unittest.mock import patch
 
-from agstack.llm.flow.agent import Agent
-from agstack.llm.flow.context import FlowContext
-from agstack.llm.flow.event import EventType
+from agstack.genai.flow.agent import Agent
+from agstack.genai.flow.context import FlowContext
+from agstack.genai.flow.event import EventType
 from tests.test_flow_error_semantics import FakeStreamClient, _collect, _finish_chunk, _run, _text_chunk
 
 
@@ -16,7 +16,7 @@ class _TurnAwareAgent(Agent):
 
 
 class TestRequestOverrides:
-    @patch("agstack.llm.flow.agent.get_llm_client")
+    @patch("agstack.genai.flow.agent.get_llm_client")
     def test_overrides_merged_per_turn(self, mock_get_client):
         client = FakeStreamClient([[_text_chunk("hi"), _finish_chunk()]])
         mock_get_client.return_value = client
@@ -26,7 +26,7 @@ class TestRequestOverrides:
         assert client.requests[0]["extra_body"] == {"enable_thinking": True}
         assert client.requests[0]["temperature"] == 0.1
 
-    @patch("agstack.llm.flow.agent.get_llm_client")
+    @patch("agstack.genai.flow.agent.get_llm_client")
     def test_empty_response_retried_once_with_retry_overrides(self, mock_get_client):
         client = FakeStreamClient([[_finish_chunk()], [_text_chunk("answer"), _finish_chunk()]])
         mock_get_client.return_value = client
@@ -39,7 +39,7 @@ class TestRequestOverrides:
         assert ctx.outputs["a"]["result"] == "answer"
         assert [e["delta"] for e in events if e["type"] == EventType.TEXT_MESSAGE_CONTENT] == ["answer"]
 
-    @patch("agstack.llm.flow.agent.get_llm_client")
+    @patch("agstack.genai.flow.agent.get_llm_client")
     def test_empty_response_not_retried_by_default(self, mock_get_client):
         client = FakeStreamClient([[_finish_chunk()]])
         mock_get_client.return_value = client

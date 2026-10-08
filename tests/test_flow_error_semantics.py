@@ -16,13 +16,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from agstack.llm.flow.agent import Agent
-from agstack.llm.flow.context import FlowContext
-from agstack.llm.flow.event import EventType
-from agstack.llm.flow.exceptions import AgentError, NodeExecutionError
-from agstack.llm.flow.flow import Flow
-from agstack.llm.flow.registry import registry
-from agstack.llm.flow.tool import Tool
+from agstack.genai.flow.agent import Agent
+from agstack.genai.flow.context import FlowContext
+from agstack.genai.flow.event import EventType
+from agstack.genai.flow.exceptions import AgentError, NodeExecutionError
+from agstack.genai.flow.flow import Flow
+from agstack.genai.flow.registry import registry
+from agstack.genai.flow.tool import Tool
 
 
 def _run(coro):
@@ -85,7 +85,7 @@ class TestAgentMaxTurns:
 
         return Tool(name="looper", description="always asks for more", function=fn)
 
-    @patch("agstack.llm.flow.agent.get_llm_client")
+    @patch("agstack.genai.flow.agent.get_llm_client")
     def test_exhaustion_finalizes_explicitly(self, mock_get_client):
         """打满场景：END 事件闭合、agent_max_turns CUSTOM 事件、输出含 truncated 标记"""
         counter: dict = {}
@@ -110,7 +110,7 @@ class TestAgentMaxTurns:
         assert ctx.get_variable("_agent_call_id") is None
         assert counter["n"] == 2  # 两轮各执行一次工具
 
-    @patch("agstack.llm.flow.agent.get_llm_client")
+    @patch("agstack.genai.flow.agent.get_llm_client")
     def test_normal_exit_unchanged(self, mock_get_client):
         """正常场景：无 truncated 键、无 agent_max_turns 事件"""
         mock_get_client.return_value = FakeStreamClient([[_text_chunk("hello"), _finish_chunk()]])
@@ -124,7 +124,7 @@ class TestAgentMaxTurns:
         assert [e["type"] for e in events].count(EventType.TEXT_MESSAGE_END) == 1
         assert not any(e["type"] == EventType.CUSTOM and e.get("name") == "agent_max_turns" for e in events)
 
-    @patch("agstack.llm.flow.agent.get_llm_client")
+    @patch("agstack.genai.flow.agent.get_llm_client")
     def test_run_returns_partial_text_on_exhaustion(self, mock_get_client):
         counter: dict = {}
         turn = [
@@ -138,7 +138,7 @@ class TestAgentMaxTurns:
         result = _run(agent.run(FlowContext(variables={"input": "go"})))
         assert "partial" in result["result"]
 
-    @patch("agstack.llm.flow.agent.get_llm_client")
+    @patch("agstack.genai.flow.agent.get_llm_client")
     def test_on_max_turns_error_mode(self, mock_get_client):
         """严格模式：yield RUN_ERROR 后抛 AgentError"""
         counter: dict = {}
@@ -163,7 +163,7 @@ class TestAgentMaxTurns:
 
 
 class TestToolArgsParseFailure:
-    @patch("agstack.llm.flow.agent.get_llm_client")
+    @patch("agstack.genai.flow.agent.get_llm_client")
     def test_invalid_json_feeds_error_back_to_model(self, mock_get_client):
         """解析失败：工具不被调用，错误进 tool message 与 TOOL_CALL_RESULT，下一轮模型可见"""
         counter: dict = {"n": 0}
@@ -206,7 +206,7 @@ class TestToolArgsParseFailure:
         # 循环正常继续并结束
         assert ctx.outputs["worker"] == {"result": "done"}
 
-    @patch("agstack.llm.flow.agent.get_llm_client")
+    @patch("agstack.genai.flow.agent.get_llm_client")
     def test_empty_arguments_still_calls_tool(self, mock_get_client):
         """arguments 为空字符串维持现行为：无参工具正常调用"""
         captured: dict = {"n": 0}
@@ -306,7 +306,7 @@ _NEVER_EDGE = {"condition": "$v._never == yes"}  # 恒不满足且无 fallback�
 
 
 class TestNodeUsageAttribution:
-    @patch("agstack.llm.flow.nodes.llm_chat_node.get_llm_client")
+    @patch("agstack.genai.flow.nodes.llm_chat_node.get_llm_client")
     def test_single_llm_node(self, mock_get_client):
         mock_client = AsyncMock()
         mock_client.chat = AsyncMock(return_value=_chat_response("hi", 10, 5))
@@ -326,7 +326,7 @@ class TestNodeUsageAttribution:
         assert node.usage.total_tokens == 15
         assert node.usage.total_tokens == ctx.trace.total_usage.total_tokens
 
-    @patch("agstack.llm.flow.nodes.llm_chat_node.get_llm_client")
+    @patch("agstack.genai.flow.nodes.llm_chat_node.get_llm_client")
     def test_two_serial_llm_nodes_sum_to_total(self, mock_get_client):
         mock_client = AsyncMock()
         mock_client.chat = AsyncMock(side_effect=[_chat_response("a", 10, 5), _chat_response("b", 6, 2)])
@@ -370,7 +370,7 @@ class TestNodeUsageAttribution:
         node = next(n for n in ctx.trace.nodes if n.node_id == "py1")
         assert node.usage is None
 
-    @patch("agstack.llm.flow.nodes.llm_chat_node.get_llm_client")
+    @patch("agstack.genai.flow.nodes.llm_chat_node.get_llm_client")
     def test_parallel_container_owns_branch_usage(self, mock_get_client):
         """parallel 容器 usage = 分支用量总和，分支节点 usage 为 None"""
         mock_client = AsyncMock()

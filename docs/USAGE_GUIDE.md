@@ -32,7 +32,7 @@ pip install agstack
 ### 1.2 Basic Example
 
 ```python
-from agstack.llm.flow import (
+from agstack.genai.flow import (
     Agent,
     Tool,
     Flow,
@@ -73,16 +73,10 @@ agstack/
 ├── schema.py          # 数据模型基类
 ├── registry.py        # 全局注册中心
 ├── exceptions.py      # 异常定义
-├── llm/              # LLM 相关功能
-│   ├── client.py     # LLM 客户端
-│   ├── flow/         # Flow 执行框架
-│   │   ├── agent.py  # Agent 定义
-│   │   ├── tool.py   # Tool 定义
-│   │   ├── flow.py   # Flow 编排
-│   │   ├── context.py # 执行上下文
-│   │   ├── registry.py # Flow 注册中心
-│   │   └── factory.py  # 工厂函数
-│   └── ...
+├── genai/            # 生成式 AI 三层（依赖单向 llm ← flow ← harness）
+│   ├── llm/          # 模型接入：client / hooks（F6 调用钩子）/ prompts / token
+│   ├── flow/         # Flow 执行框架（agent / tool / flow / context / registry / nodes / guards）
+│   └── harness/      # 通用运行时（ports / events / projection / metering / overflow / context / spill）
 ├── fastapi/          # FastAPI 集成
 ├── infra/            # 基础设施
 │   ├── db/           # 数据库
@@ -96,10 +90,10 @@ agstack/
 | 组件 | 作用 | 导入 |
 |------|------|------|
 | `BaseSchema` | Pydantic 模型基类 | `from agstack.schema import BaseSchema` |
-| `registry` | 全局注册中心 | `from agstack.llm.flow import registry` |
-| `Agent` | LLM 代理 | `from agstack.llm.flow import Agent` |
-| `Tool` | 工具定义 | `from agstack.llm.flow import Tool` |
-| `Flow` | 流程编排 | `from agstack.llm.flow import Flow` |
+| `registry` | 全局注册中心 | `from agstack.genai.flow import registry` |
+| `Agent` | LLM 代理 | `from agstack.genai.flow import Agent` |
+| `Tool` | 工具定义 | `from agstack.genai.flow import Tool` |
+| `Flow` | 流程编排 | `from agstack.genai.flow import Flow` |
 
 ---
 
@@ -112,7 +106,7 @@ agstack/
 **创建工具**:
 
 ```python
-from agstack.llm.flow import Tool, FlowContext
+from agstack.genai.flow import Tool, FlowContext
 
 class WebSearchTool(Tool):
     def __init__(self):
@@ -138,7 +132,7 @@ class WebSearchTool(Tool):
 **注册工具**:
 
 ```python
-from agstack.llm.flow import registry
+from agstack.genai.flow import registry
 
 registry.register_tool("web_search", WebSearchTool)
 ```
@@ -174,7 +168,7 @@ registry 级全局钩子链，在"工具入参进入工具函数前 / 结果落�
 tool 节点、`tool.run()` 直调）的唯一咽喉，子类覆写 `_execute` 也绕不开。
 
 ```python
-from agstack.llm.flow import Deny, ToolHook, registry
+from agstack.genai.flow import Deny, ToolHook, registry
 
 class KbPermissionGate(ToolHook):
     async def pre_execute(self, context, tool, inputs):
@@ -222,7 +216,7 @@ Agent 是调用 LLM 并可以使用工具的智能代理。
 **创建 Agent**:
 
 ```python
-from agstack.llm.flow import Agent, FlowContext
+from agstack.genai.flow import Agent, FlowContext
 
 class MyAgent(Agent):
     def __init__(self, model="gpt-4"):
@@ -261,7 +255,7 @@ Flow 用于编排多个 Agent 和 Tool 的执行。
 **创建 Flow**:
 
 ```python
-from agstack.llm.flow import Flow, FlowContext
+from agstack.genai.flow import Flow, FlowContext
 
 flow = Flow(
     flow_id="my_flow",
@@ -352,7 +346,7 @@ context.is_cancelled      # 长 I/O 工具可自查以提前返回
 FlowContext 在执行过程中传递状态和数据。
 
 ```python
-from agstack.llm.flow import FlowContext
+from agstack.genai.flow import FlowContext
 
 context = FlowContext(session_id="user123")
 
@@ -379,8 +373,8 @@ registry 级全局钩子链，织入 `LLMClient.chat`（异步，含流式与 vi
 `Agent.request_overrides`，两者不重叠。
 
 ```python
-from agstack.llm.flow import registry
-from agstack.llm.hooks import CallMeta, LLMCallHook, StreamSummary
+from agstack.genai.flow import registry
+from agstack.genai.llm.hooks import CallMeta, LLMCallHook, StreamSummary
 
 class AnchorMeter(LLMCallHook):
     async def before_call(self, messages, tools, meta: CallMeta):
@@ -406,12 +400,12 @@ registry.register_llm_hook(Compressor(), prepend=True)   # 抢链头：before �
 
 ### 3.6 harness 运行时部件（2.3.0+）
 
-`agstack.llm.harness` 收模型无关、表无关、产品无关的运行时部件；存储由应用实现端口注入。
+`agstack.genai.harness` 收模型无关、表无关、产品无关的运行时部件；存储由应用实现端口注入。
 
 **存储端口**：agstack 只声明 Protocol，应用在进程入口注册一次。
 
 ```python
-from agstack.llm.harness import register_ports, get_ports, LogEvent, SessionLog, SpillStore
+from agstack.genai.harness import register_ports, get_ports, LogEvent, SessionLog, SpillStore
 
 register_ports(session_log=PgSessionLog(), spill=FsSpillStore(), usage=usage_collector_callback)
 get_ports().spill   # 未注册的端口为 None，消费方自行降级
@@ -432,7 +426,7 @@ get_ports().spill   # 未注册的端口为 None，消费方自行降级
 **spill 钩子**（`spill`）：超长工具结果落盘的 ToolHook post 钩子，`prepend=True` 挂链头。
 
 ```python
-from agstack.llm.harness import SpillHook, SpillPolicy, SpillOwner
+from agstack.genai.harness import SpillHook, SpillPolicy, SpillOwner
 
 policy = SpillPolicy(
     max_inline_tokens=6000,
@@ -452,10 +446,10 @@ content；钩子若换掉 `result.result` 而未给新 content，Tool 按新 res
 
 ### 3.7 守卫、事件、投影与计量（2.4.0+）
 
-**AgentGuards**（`agstack.llm.flow.guards`）：工具调用的「红线在代码」层，机制在库、策略在应用。
+**AgentGuards**（`agstack.genai.flow.guards`）：工具调用的「红线在代码」层，机制在库、策略在应用。
 
 ```python
-from agstack.llm.flow import AgentGuards, GuardState, GuardedToolCalls, buffer_plan_text
+from agstack.genai.flow import AgentGuards, GuardState, GuardedToolCalls, buffer_plan_text
 
 GUARDS = AgentGuards(
     capped_family=("retrieval", "web_search"), cap=5,        # 受上限的工具族与上限
@@ -483,10 +477,10 @@ class MyAgent(GuardedToolCalls, Agent):                       # mixin 必须在 
 `_folded` 标记不重复处理）。`buffer_plan_text` 按轮缓冲助手文字：轮以工具调用结束的文字记为 `agent_plan` 执行记录
 不放流（超过 `buffer_chars` 后实时放流），轮次耗尽或末轮无文字按 `closing_line(messages)` 收尾并改写输出 `result`。
 
-**EventHub**（`agstack.llm.harness.events`）：任务事件的序号 / 快照 / 订阅 / 重放。持久化不走端口，由应用注入三个协程：
+**EventHub**（`agstack.genai.harness.events`）：任务事件的序号 / 快照 / 订阅 / 重放。持久化不走端口，由应用注入三个协程：
 
 ```python
-from agstack.llm.harness import EventHub, filter_user_event
+from agstack.genai.harness import EventHub, filter_user_event
 
 hub = EventHub(persist=save_event, replay=load_events, is_finished=task_done)   # (task_id, seq, evt) / (task_id, after_seq) / (task_id)
 hub.begin(task_id)
@@ -501,10 +495,10 @@ async for evt in hub.stream(task_id, after_seq=n): ...                        # 
 
 订阅者 / 快照 / 序号是进程级状态，同进程内任意 `EventHub()` 实例共享。
 
-**Projection**（`agstack.llm.harness.projection`）：日志行 → 模型历史，行形状与 `LogEvent` 同（ORM 行直接可用）。
+**Projection**（`agstack.genai.harness.projection`）：日志行 → 模型历史，行形状与 `LogEvent` 同（ORM 行直接可用）。
 
 ```python
-from agstack.llm.harness import Projection, select_recent
+from agstack.genai.harness import Projection, select_recent
 
 proj = Projection(event_of=..., project_event=..., event_skipper=..., rewrite=..., notes=...)
 history = proj.project(select_recent(rows_newest_first, limit, is_dialogue_grade))
@@ -513,9 +507,78 @@ history = proj.project(select_recent(rows_newest_first, limit, is_dialogue_grade
 遮蔽行（`shadowed_by` 非空）一律过滤；事件行按 `project_event` 投影或丢弃，`event_skipper(rows)` 用整批行构造跨行判定；
 `rewrite(role, content, metadata)` 改写正文；`notes(role, metadata)` 附带 system note；末尾连续同角色 user / assistant 合并。
 
-**tokens**（`agstack.llm.harness.tokens`）：`clamp_ratio(estimated, actual, bounds=(0.8, 1.5))`、
+**tokens**（`agstack.genai.harness.metering`）：`clamp_ratio(estimated, actual, bounds=(0.8, 1.5))`、
 `calibration_from_samples(samples, model)`（取第一条同模型有效样本）、`calibration_sample(...)`、
 `CalibratedCounter(count_tokens, model, ratio)`、`anchored_estimate(anchor, tail_tokens, fallback_tokens=)`。
+
+### 3.8 上下文溢出恢复（3.0+）
+
+**OverflowPolicy**（`agstack.genai.harness.overflow`）：请求把窗口撑爆时的三态判定与一次 compact-and-retry，
+机制在库、压缩动作在应用。
+
+```python
+from agstack.genai.harness import OverflowPolicy, OVERFLOW_RECORD
+
+async def compact(context, kind) -> bool:                      # kind ∈ {"error", "silent", "length"}
+    folded = fold_tool_messages(context, "a", budget_tokens=0, model=..., count_tokens=...)   # 折叠工具结果
+    dropped = context.history[: len(context.history) // 2]     # 再砍历史前半（或换成同步摘要）
+    del context.history[: len(dropped)]
+    add_trace_record(context, OVERFLOW_RECORD, args={"kind": kind}, result=f"folded={folded} dropped={len(dropped)}")
+    return bool(folded or dropped)                             # False → 不重发，按原路报错
+
+OVERFLOW = OverflowPolicy(compact=compact, context_length=lambda c: c.get_variable("context_length"))
+
+class MyAgent(Agent):
+    overflow = OVERFLOW                                        # 类属性缺省；构造参数 overflow= 可覆盖
+```
+
+三态：后端报错文本命中「context length / maximum context / prompt is too long / too many tokens …」（限流不算）→
+`error`；请求成功但实报 `prompt_tokens` > 窗口 → `silent`；`finish_reason="length"` 且无输出且输入 ≥ 99% 窗口 →
+`length`。命中且本次尝试尚未向用户放出文字 / 工具调用时：yield `CUSTOM agent_overflow {agentName, kind, turn}` →
+`await compact(context, kind)` → 有成效即同一轮重发；每次运行最多 `max_recoveries`（缺省 1）次，再溢出按原路报
+`AGENT_EXECUTION_FAILED`。`classify_overflow(...)` 可单独调用。
+
+### 3.9 上下文压缩引擎（3.0+）
+
+**ContextEngine**（`agstack.genai.harness.context`）：在 token 预算内构造一轮请求的模型历史。机制在库，历史从哪张表来、摘要
+怎么生成 / 落库、阈值取多少由应用给。
+
+```python
+from agstack.genai.harness import ContextEngine, ContextPolicy, SummaryRecord, schedule_once
+
+class TopicHistory:                      # 实现 HistorySource：recent / after / all_rows / count / project / ref_of
+    ...
+
+class TopicSummaries:                    # 实现 SummaryStore：latest / save
+    ...
+
+async def summarize(messages, previous):  # 调模型出摘要正文；previous 为旧摘要（增量合并）或 None
+    ...
+
+engine = ContextEngine(
+    source=TopicHistory(topic_id), summaries=TopicSummaries(topic_id), summarize=summarize,
+    count=lambda text: count_tokens(text, model) * ratio, context_length=32768, model=model,
+    anchor=last_anchor,                  # 上轮 {first_id, last_id, history_tokens, model}，无则 None
+    policy=ContextPolicy(output_ratio=0.25, recent_limit=20, summary_min_messages=16,
+                         incremental_threshold=10, keep_recent=6, render=render_summary, schedule=schedule_once),
+    session_key=topic_id,
+)
+history = await engine.build_history(reserved_tokens=prompt_tokens)
+span = engine.history_span               # 快速路径整窗送出时的行跨度，与实测 prompt_tokens 配对落下一轮锚点
+```
+
+顺序：预算分层 → 最近 N 条快速路径（锚点计量算窗内 token）→ 预算不足只读消费已有摘要（缺失 / 过期投递
+`policy.schedule(session_key, engine.refresh_summary)`，请求路径不调模型）→ 两遍装填（先 user 消息到 `user_ratio`）。
+`refresh_summary()` 是后台任务体：无摘要且行数 ≥ `summary_min_messages` 全量摘要（留最近 `keep_recent` 条），有摘要
+且新行 ≥ `incremental_threshold` 增量摘要。`fill_to_budget` / `anchored_history_tokens` / `messages_tokens` 可单独用。
+
+### 3.10 包布局（3.0 起）
+
+生成式 AI 三层收在 `agstack.genai` 下，依赖单向：`agstack.genai.llm` 只留模型接入（`client` / `hooks` / `prompts` / `token`），
+编排是 `agstack.genai.flow`（依赖 llm），运行时是 `agstack.genai.harness`（依赖 llm 与 flow）。2.x 的 `agstack.llm`、
+`agstack.llm.flow`、`agstack.llm.harness` 已移除，不留别名（破坏性变更随 major 发布，下游一次改完）。`LLMCallHook`
+留在 `agstack.genai.llm.hooks`（client 织入它，不能反向依赖 harness），`agstack.genai.harness` 重导出。
+`harness.tokens` 改名 `harness.metering`（校准与锚点计量），与 `llm.token`（tiktoken 计数）区分。
 
 ## 4. Registry & Factory
 
@@ -526,7 +589,7 @@ history = proj.project(select_recent(rows_newest_first, limit, is_dialogue_grade
 **API**:
 
 ```python
-from agstack.llm.flow import registry
+from agstack.genai.flow import registry
 
 # 注册
 registry.register_tool("name", ToolClass)
@@ -551,7 +614,7 @@ tools = registry.create_tools(["tool1", "tool2"])
 **用途**: 快速创建组件，失败时抛出异常。
 
 ```python
-from agstack.llm.flow import create_tool, create_agent
+from agstack.genai.flow import create_tool, create_agent
 
 # 创建工具（失败抛 RuntimeError）
 tool = create_tool("web_search")
@@ -633,7 +696,7 @@ class InternalResult:
 
 ```python
 from agstack.exceptions import AppException
-from agstack.llm.flow.exceptions import (
+from agstack.genai.flow.exceptions import (
     FlowError,
     AgentError,
     ToolExecutionError,
@@ -645,8 +708,8 @@ from agstack.llm.flow.exceptions import (
 ### 6.2 捕获异常
 
 ```python
-from agstack.llm.flow import create_tool
-from agstack.llm.flow.exceptions import ToolExecutionError
+from agstack.genai.flow import create_tool
+from agstack.genai.flow.exceptions import ToolExecutionError
 
 try:
     tool = create_tool("my_tool")
@@ -660,7 +723,7 @@ except RuntimeError as e:
 ### 6.3 自定义异常
 
 ```python
-from agstack.llm.flow.exceptions import FlowError
+from agstack.genai.flow.exceptions import FlowError
 
 class MyCustomError(FlowError):
     """自定义错误"""
@@ -677,7 +740,7 @@ class MyCustomError(FlowError):
 ```python
 # ✅ 推荐：在应用启动时注册所有组件
 def register_components():
-    from agstack.llm.flow import registry
+    from agstack.genai.flow import registry
     from .tools import WebSearchTool, CalculatorTool
     from .agents import ChatAgent
     
@@ -711,8 +774,8 @@ result2 = await tool2.run(context)
 
 ```python
 # ✅ 推荐：优雅处理错误
-from agstack.llm.flow import registry
-from agstack.llm.flow.exceptions import ToolExecutionError
+from agstack.genai.flow import registry
+from agstack.genai.flow.exceptions import ToolExecutionError
 
 async def safe_execute_tool(tool_name: str, context):
     tool = registry.create_tool(tool_name)
@@ -731,7 +794,7 @@ async def safe_execute_tool(tool_name: str, context):
 ```python
 # ✅ 推荐：使用类型提示
 from typing import Optional
-from agstack.llm.flow import Tool, FlowContext
+from agstack.genai.flow import Tool, FlowContext
 
 async def create_and_run_tool(
     tool_name: str,
@@ -757,7 +820,7 @@ async def create_and_run_tool(
 from agstack.schema import BaseSchema
 
 # Flow 核心
-from agstack.llm.flow import (
+from agstack.genai.flow import (
     Agent,
     Tool,
     Flow,
@@ -769,14 +832,14 @@ from agstack.llm.flow import (
 )
 
 # 异常
-from agstack.llm.flow.exceptions import (
+from agstack.genai.flow.exceptions import (
     FlowError,
     AgentError,
     ToolExecutionError,
 )
 
 # 状态管理
-from agstack.llm.flow import FlowState, Record, Status
+from agstack.genai.flow import FlowState, Record, Status
 ```
 
 ### 常见模式

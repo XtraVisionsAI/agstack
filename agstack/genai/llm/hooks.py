@@ -2,8 +2,8 @@
 
 """LLM 调用钩子链（F6）：请求发出前拿到完整消息列表并可改写，响应回来后观察
 
-与 :class:`agstack.llm.flow.tool.ToolHook` 同形：模块级全局链 + registry 转发注册，``prepend`` 抢链头。
-织入点在 :meth:`agstack.llm.client.LLMClient.chat`（异步，含流式与 vision 转发），所有经 LLMClient 的
+与 :class:`agstack.genai.flow.tool.ToolHook` 同形：模块级全局链 + registry 转发注册，``prepend`` 抢链头。
+织入点在 :meth:`agstack.genai.llm.client.LLMClient.chat`（异步，含流式与 vision 转发），所有经 LLMClient 的
 聊天请求都穿链；``chat_sync`` 在线程池同步执行，不穿链。
 
 - ``before_call`` 按注册顺序执行，可改写（替换 / 压缩 / 注入）消息列表；抛异常＝整次调用失败

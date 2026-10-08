@@ -32,7 +32,7 @@ from ..exceptions import AppException
 
 # ❌ 错误
 from agstack.schema import BaseSchema
-from agstack.llm.flow.registry import registry
+from agstack.genai.flow.registry import registry
 ```
 
 ### 1.2 导入位置
@@ -153,7 +153,7 @@ class Record:
 
 ```python
 # 注册组件
-from agstack.llm.flow import registry
+from agstack.genai.flow import registry
 
 registry.register_tool("my_tool", MyToolClass)
 registry.register_agent("my_agent", MyAgentClass)
@@ -169,7 +169,7 @@ if tool:
 **规则**: 使用 factory 函数用于确信组件存在的场景。
 
 ```python
-from agstack.llm.flow import create_tool, create_agent
+from agstack.genai.flow import create_tool, create_agent
 
 # 失败时抛出 RuntimeError
 tool = create_tool("my_tool")  # 确信存在
@@ -266,7 +266,7 @@ T = TypeVar("T")  # 太通用
 
 ```
 AppException (agstack.exceptions)
-└── FlowError (agstack.llm.flow.exceptions)
+└── FlowError (agstack.genai.flow.exceptions)
     ├── AgentError
     │   ├── ToolExecutionError
     │   └── ModelError

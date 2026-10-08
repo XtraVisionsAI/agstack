@@ -12,9 +12,9 @@ from typing import Any
 
 import pytest
 
-from agstack.llm.client import LLMClient
-from agstack.llm.flow.registry import registry
-from agstack.llm.hooks import CallMeta, LLMCallHook, StreamSummary, clear_llm_hooks, register_llm_hook
+from agstack.genai.flow.registry import registry
+from agstack.genai.llm.client import LLMClient
+from agstack.genai.llm.hooks import CallMeta, LLMCallHook, StreamSummary, clear_llm_hooks, register_llm_hook
 
 
 @pytest.fixture(autouse=True)

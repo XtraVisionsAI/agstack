@@ -7,7 +7,7 @@ from __future__ import annotations
 import copy
 from typing import Any, cast
 
-from ..hooks import LLMCallHook, clear_llm_hooks, register_llm_hook
+from ..llm.hooks import LLMCallHook, clear_llm_hooks, register_llm_hook
 from .agent import Agent
 from .tool import Tool, ToolHook, clear_tool_hooks, register_tool_hook
 

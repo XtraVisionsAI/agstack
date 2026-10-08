@@ -1,12 +1,12 @@
 #  Copyright (c) 2020-2026 XtraVisions, All rights reserved.
 
-"""agstack.llm.harness：端口注册面与截断设施"""
+"""agstack.genai.harness：端口注册面与截断设施"""
 
 import pytest
 
-from agstack.llm import client as llm_client
-from agstack.llm.harness import LogEvent, clamp_results, clear_ports, get_ports, register_ports, truncate_middle
-from agstack.llm.harness.ports import LOG_KINDS, SHADOW_KINDS, SessionLog, SpillStore
+from agstack.genai.harness import LogEvent, clamp_results, clear_ports, get_ports, register_ports, truncate_middle
+from agstack.genai.harness.ports import LOG_KINDS, SHADOW_KINDS, SessionLog, SpillStore
+from agstack.genai.llm import client as llm_client
 
 
 @pytest.fixture(autouse=True)

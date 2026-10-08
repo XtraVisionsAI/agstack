@@ -1,21 +1,21 @@
 #  Copyright (c) 2020-2026 XtraVisions, All rights reserved.
 
-"""agstack.llm.harness.events / projection / tokens（2.4）验收用例"""
+"""agstack.genai.harness.events / projection / tokens（2.4）验收用例"""
 
 import asyncio
 from types import SimpleNamespace
 from uuid import uuid4
 
-from agstack.llm.harness.events import EventHub, TaskSnapshot, filter_user_event
-from agstack.llm.harness.ports import TokenAnchor
-from agstack.llm.harness.projection import Projection, is_shadowed, merge_consecutive, select_recent
-from agstack.llm.harness.tokens import (
+from agstack.genai.harness.events import EventHub, TaskSnapshot, filter_user_event
+from agstack.genai.harness.metering import (
     CalibratedCounter,
     anchored_estimate,
     calibration_from_samples,
     calibration_sample,
     clamp_ratio,
 )
+from agstack.genai.harness.ports import TokenAnchor
+from agstack.genai.harness.projection import Projection, is_shadowed, merge_consecutive, select_recent
 
 
 def _run(coro):

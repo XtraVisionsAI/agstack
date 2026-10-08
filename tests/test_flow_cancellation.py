@@ -13,13 +13,13 @@ from unittest.mock import patch
 
 import pytest
 
-from agstack.llm.flow.agent import Agent
-from agstack.llm.flow.context import FlowContext
-from agstack.llm.flow.event import EventType
-from agstack.llm.flow.exceptions import FlowExecutionError
-from agstack.llm.flow.flow import Flow
-from agstack.llm.flow.registry import registry
-from agstack.llm.flow.tool import Tool
+from agstack.genai.flow.agent import Agent
+from agstack.genai.flow.context import FlowContext
+from agstack.genai.flow.event import EventType
+from agstack.genai.flow.exceptions import FlowExecutionError
+from agstack.genai.flow.flow import Flow
+from agstack.genai.flow.registry import registry
+from agstack.genai.flow.tool import Tool
 from tests.test_flow_error_semantics import (
     FakeStreamClient,
     _collect,
@@ -143,7 +143,7 @@ class TestFlowCancellation:
 
 
 class TestAgentCancellation:
-    @patch("agstack.llm.flow.agent.get_llm_client")
+    @patch("agstack.genai.flow.agent.get_llm_client")
     def test_tool_calls_stop_at_checkpoint(self, mock_get_client):
         """五个 tool_calls，第二个执行完成后取消：第三个不执行"""
         counter = {"n": 0}
@@ -170,7 +170,7 @@ class TestAgentCancellation:
         assert events[-1]["type"] == EventType.RUN_ERROR
         assert events[-1]["code"] == "CANCELLED"
 
-    @patch("agstack.llm.flow.agent.get_llm_client")
+    @patch("agstack.genai.flow.agent.get_llm_client")
     def test_cancel_before_first_turn_skips_llm(self, mock_get_client):
         """轮次开始检查点：预先取消的 context 不发起任何 LLM 调用"""
         client = FakeStreamClient([[_text_chunk("hi"), _finish_chunk()]])

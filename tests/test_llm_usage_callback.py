@@ -6,8 +6,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from agstack.llm import client as llm_client
-from agstack.llm.client import UsageEvent, _emit_usage, set_usage_callback
+from agstack.genai.llm import client as llm_client
+from agstack.genai.llm.client import UsageEvent, _emit_usage, set_usage_callback
 
 
 @pytest.fixture(autouse=True)

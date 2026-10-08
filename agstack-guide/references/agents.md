@@ -7,7 +7,7 @@ Agents are LLM-powered intelligent components that can have conversations, use t
 ## Agent Anatomy
 
 ```python
-from agstack.llm.flow import Agent, FlowContext
+from agstack.genai.flow import Agent, FlowContext
 
 class MyAgent(Agent):
     def __init__(self):
@@ -41,7 +41,7 @@ class ChatAgent(Agent):
 ### Agent with Tools
 
 ```python
-from agstack.llm.flow import registry
+from agstack.genai.flow import registry
 
 # First register your tools
 registry.register_tool("web_search", WebSearchTool)
@@ -65,7 +65,7 @@ class ResearchAgent(Agent):
 Agents must be registered before use:
 
 ```python
-from agstack.llm.flow import registry
+from agstack.genai.flow import registry
 
 # Register agent class (not instance, not lambda)
 registry.register_agent("chat", ChatAgent)
@@ -77,7 +77,7 @@ registry.register_agent("research", ResearchAgent)
 ### Non-Streaming Execution
 
 ```python
-from agstack.llm.flow import FlowContext, create_agent
+from agstack.genai.flow import FlowContext, create_agent
 
 # Create context
 context = FlowContext()
@@ -94,7 +94,7 @@ print(context.usage)       # Token usage info
 ### Streaming Execution
 
 ```python
-from agstack.llm.flow import EventType
+from agstack.genai.flow import EventType
 
 async for evt in agent.stream(context):
     event_type = evt.get("type")
@@ -176,7 +176,7 @@ print(f"Total tokens: {usage.total_tokens}")
 ## Error Handling
 
 ```python
-from agstack.llm.flow.exceptions import FlowError
+from agstack.genai.flow.exceptions import FlowError
 
 try:
     agent = create_agent("my_agent")

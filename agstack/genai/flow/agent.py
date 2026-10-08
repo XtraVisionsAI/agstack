@@ -7,7 +7,8 @@ import json
 from typing import TYPE_CHECKING, Any, AsyncIterator
 from uuid import uuid4
 
-from ..client import get_llm_client
+from ..harness.overflow import OverflowPolicy, classify_overflow, usage_tokens
+from ..llm.client import get_llm_client
 from . import event
 from .context import Usage
 from .event import EventType
@@ -21,6 +22,9 @@ if TYPE_CHECKING:
 
 class Agent:
     """Agent 定义"""
+
+    #: 上下文溢出恢复策略（harness.overflow；None 不恢复）。子类可按类属性给缺省，构造参数 ``overflow`` 覆盖
+    overflow: OverflowPolicy | None = None
 
     def __init__(
         self,
@@ -37,6 +41,7 @@ class Agent:
         retry_empty_response: bool = False,
         label: str | None = None,
         echo: bool = False,
+        overflow: OverflowPolicy | None = None,
     ):
         """初始化 Agent
 
@@ -52,6 +57,7 @@ class Agent:
             以 ``request_overrides(..., retry=True)`` 的覆盖参数重试一次
         :param label: 面向用户的展示名称（控制 STEP 进度事件可见性）
         :param echo: 是否转发 TEXT_MESSAGE 给用户
+        :param overflow: 上下文溢出恢复策略（三态判定命中后调 ``compact`` 压缩并同轮重发一次，见 harness.overflow）
         """
         self.name = name
         self.instructions = instructions or f"You are {name}, a helpful AI assistant."
@@ -65,6 +71,8 @@ class Agent:
         self.retry_empty_response = retry_empty_response
         self.label = label
         self.echo = echo
+        if overflow is not None:
+            self.overflow = overflow
 
     def get_system_message(self) -> dict[str, Any]:
         """获取系统消息"""
@@ -101,6 +109,25 @@ class Agent:
             if tool.name == name:
                 return tool
         return None
+
+    # ── 溢出恢复（机制；策略在 self.overflow） ──
+
+    def _max_recoveries(self) -> int:
+        return self.overflow.max_recoveries if self.overflow is not None else 0
+
+    def _overflow_kind(self, context: "FlowContext", *, error: BaseException | None = None, **usage: Any) -> str | None:
+        if self.overflow is None:
+            return None
+        if error is not None:
+            return classify_overflow(error=error)
+        return classify_overflow(context_length=self.overflow.window(context), **usage)
+
+    async def _compact_overflow(self, context: "FlowContext", kind: str) -> bool:
+        assert self.overflow is not None
+        try:
+            return bool(await self.overflow.compact(context, kind))
+        except Exception:  # noqa: BLE001 — 压缩失败不替代原错误，按原路报错
+            return False
 
     def _group_tool_calls(self, tool_calls: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
         """按声明分组：连续的 concurrency_safe 调用聚为一组并发执行，其余单独成组串行
@@ -290,6 +317,7 @@ class Agent:
 
         # Agent 循环
         assistant_content = ""
+        recoveries = 0  # 溢出恢复次数（每次运行上限 overflow.max_recoveries）
         for turn in range(1, self.max_turns + 1):
             # 协作式取消检查点：不再开始新的 LLM 轮次
             if context.is_cancelled:
@@ -306,6 +334,8 @@ class Agent:
                 assistant_content = ""
                 tool_calls: list[dict[str, Any]] = []
                 tool_calls_buffer: dict[int, dict[str, Any]] = {}
+                finish_reason: str | None = None
+                turn_usage: Any = None
 
                 try:
                     kwargs: dict[str, Any] = {
@@ -362,6 +392,7 @@ class Agent:
 
                         # 完成
                         if choice.finish_reason:
+                            finish_reason = choice.finish_reason
                             # AG-UI: 工具调用事件
                             for tool_call_data in tool_calls_buffer.values():
                                 tool_calls.append(tool_call_data)
@@ -383,6 +414,7 @@ class Agent:
 
                             # 更新 usage
                             if hasattr(chunk, "usage") and chunk.usage:
+                                turn_usage = chunk.usage
                                 context.add_usage(
                                     Usage(
                                         prompt_tokens=chunk.usage.prompt_tokens or 0,
@@ -392,10 +424,38 @@ class Agent:
                                 )
 
                 except Exception as e:
+                    # 上下文溢出（后端报错态）：尚未放出任何内容时压缩并同轮重发一次（harness.overflow）
+                    kind = self._overflow_kind(context, error=e) if not assistant_content and not tool_calls else None
+                    if kind and recoveries < self._max_recoveries():
+                        recoveries += 1
+                        yield event.custom(
+                            name="agent_overflow", value={"agentName": self.name, "kind": kind, "turn": turn}
+                        )
+                        if await self._compact_overflow(context, kind):
+                            messages = [self.get_system_message()] + context.history + context.get_messages(self.name)
+                            continue
                     error_msg = str(e)
                     # AG-UI: RUN_ERROR
                     yield event.run_error(message=error_msg)
                     raise FlowError("AGENT_EXECUTION_FAILED", 500, {"error": error_msg}) from e
+
+                # 上下文溢出（静默 / length 态）：请求成功但输入已撑爆窗口且本次没有产出，同样压缩重发一次
+                if not tool_calls and not assistant_content.strip():
+                    prompt_tokens, completion_tokens = usage_tokens(turn_usage)
+                    kind = self._overflow_kind(
+                        context,
+                        finish_reason=finish_reason,
+                        prompt_tokens=prompt_tokens,
+                        completion_tokens=completion_tokens,
+                    )
+                    if kind and recoveries < self._max_recoveries():
+                        recoveries += 1
+                        yield event.custom(
+                            name="agent_overflow", value={"agentName": self.name, "kind": kind, "turn": turn}
+                        )
+                        if await self._compact_overflow(context, kind):
+                            messages = [self.get_system_message()] + context.history + context.get_messages(self.name)
+                            continue
 
                 if self.retry_empty_response and attempt == 0 and not tool_calls and not assistant_content.strip():
                     attempt = 1

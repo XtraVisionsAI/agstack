@@ -7,7 +7,7 @@ Flows orchestrate multiple agents and tools into complex, multi-step workflows. 
 ## Flow Anatomy
 
 ```python
-from agstack.llm.flow import Flow, FlowContext
+from agstack.genai.flow import Flow, FlowContext
 
 flow = Flow(
     flow_id="my_workflow",           # Unique identifier
@@ -277,7 +277,7 @@ flow = Flow(
 ### Basic Execution
 
 ```python
-from agstack.llm.flow import FlowContext
+from agstack.genai.flow import FlowContext
 
 # Create context with input variables
 context = FlowContext()
@@ -307,7 +307,7 @@ print(context.outputs["search"])
 ### Streaming Execution
 
 ```python
-from agstack.llm.flow import EventType
+from agstack.genai.flow import EventType
 
 async for evt in flow.stream(context):
     event_type = evt.get("type")
@@ -458,7 +458,7 @@ The `iteration` node type loops over a list:
 Flows can be registered for reuse:
 
 ```python
-from agstack.llm.flow import registry
+from agstack.genai.flow import registry
 
 # Register flow class/factory
 registry.register_flow("onboarding", lambda: onboarding_flow)
@@ -473,7 +473,7 @@ flow = registry.create_flow("onboarding")
 Flows can be loaded from JSON files or dicts:
 
 ```python
-from agstack.llm.flow import FlowLoader
+from agstack.genai.flow import FlowLoader
 
 # Load from dict
 config = {
@@ -519,7 +519,7 @@ for edge_trace in trace.edges:
 ## Error Handling
 
 ```python
-from agstack.llm.flow.exceptions import FlowError, NodeExecutionError
+from agstack.genai.flow.exceptions import FlowError, NodeExecutionError
 
 try:
     result = await flow.run(context)
@@ -555,7 +555,7 @@ except Exception as e:
 Register your own node types:
 
 ```python
-from agstack.llm.flow import NodeHandler, register_node_handler
+from agstack.genai.flow import NodeHandler, register_node_handler
 
 class MyHandler(NodeHandler):
     node_type = "my_type"

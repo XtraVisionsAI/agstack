@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 from uuid import UUID
 
-from ..client import UsageEvent, set_usage_callback
+from ..llm.client import UsageEvent, set_usage_callback
 
 
 #: 日志事件类型
@@ -152,7 +152,7 @@ def register_ports(
 ) -> None:
     """注册端口实现（进程级单例；只覆盖传入的项，传 None 的项保持不变）
 
-    ``usage`` 同时写入 :func:`agstack.llm.client.set_usage_callback`，两处始终一致。
+    ``usage`` 同时写入 :func:`agstack.genai.llm.client.set_usage_callback`，两处始终一致。
     """
     if session_log is not None:
         _PORTS.session_log = session_log

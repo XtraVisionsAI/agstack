@@ -12,10 +12,10 @@ import asyncio
 import time
 from unittest.mock import patch
 
-from agstack.llm.flow.agent import Agent
-from agstack.llm.flow.context import FlowContext
-from agstack.llm.flow.event import EventType
-from agstack.llm.flow.tool import Tool
+from agstack.genai.flow.agent import Agent
+from agstack.genai.flow.context import FlowContext
+from agstack.genai.flow.event import EventType
+from agstack.genai.flow.tool import Tool
 from tests.test_flow_cancellation import _tool_calls_chunk
 from tests.test_flow_error_semantics import (
     FakeStreamClient,
@@ -47,7 +47,7 @@ def _one_turn_client(calls: list[tuple[str, str, str]]) -> FakeStreamClient:
 
 
 class TestConcurrentToolCalls:
-    @patch("agstack.llm.flow.agent.get_llm_client")
+    @patch("agstack.genai.flow.agent.get_llm_client")
     def test_safe_group_runs_concurrently(self, mock_get_client):
         """三个 concurrency_safe、各 sleep 的工具同轮调用：总耗时约为单个而非三倍"""
         log: list[tuple[str, str]] = []
@@ -63,7 +63,7 @@ class TestConcurrentToolCalls:
         # 并发证据：三个 start 都发生在任何 end 之前
         assert [kind for kind, _ in log[:3]] == ["start", "start", "start"]
 
-    @patch("agstack.llm.flow.agent.get_llm_client")
+    @patch("agstack.genai.flow.agent.get_llm_client")
     def test_mixed_safe_unsafe_grouping(self, mock_get_client):
         """S,S,U,S：前两个并发成组，第三、四个各自单独串行，执行顺序保持"""
         log: list[tuple[str, str]] = []
@@ -87,7 +87,7 @@ class TestConcurrentToolCalls:
         u1_start = log.index(("start", "u1"))
         assert ("end", "g1") in log[:u1_start] and ("end", "g2") in log[:u1_start]
 
-    @patch("agstack.llm.flow.agent.get_llm_client")
+    @patch("agstack.genai.flow.agent.get_llm_client")
     def test_tool_messages_keep_original_order(self, mock_get_client):
         """下一轮 LLM 请求中 tool 消息顺序与 assistant.tool_calls 一致（即使完成顺序相反）"""
         log: list[tuple[str, str]] = []
@@ -108,7 +108,7 @@ class TestConcurrentToolCalls:
         tool_msgs = [m for m in second_request["messages"] if m.get("role") == "tool"]
         assert [m["tool_call_id"] for m in tool_msgs] == ["tc1", "tc2"]
 
-    @patch("agstack.llm.flow.agent.get_llm_client")
+    @patch("agstack.genai.flow.agent.get_llm_client")
     def test_failure_in_group_does_not_affect_others(self, mock_get_client):
         """组内单个失败：其它调用正常完成，失败经 ToolResult 通道反馈"""
 
@@ -133,7 +133,7 @@ class TestConcurrentToolCalls:
         tool_msgs = [m for m in client.requests[1]["messages"] if m.get("role") == "tool"]
         assert [m["tool_call_id"] for m in tool_msgs] == ["tc1", "tc2", "tc3"]
 
-    @patch("agstack.llm.flow.agent.get_llm_client")
+    @patch("agstack.genai.flow.agent.get_llm_client")
     def test_default_unsafe_stays_serial(self, mock_get_client):
         """全默认值回归：不声明 concurrency_safe 时严格串行，顺序与 2.0.0 一致"""
         log: list[tuple[str, str]] = []

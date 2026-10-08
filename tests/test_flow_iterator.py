@@ -4,11 +4,11 @@
 
 import asyncio
 
-from agstack.llm.flow.context import FlowContext
-from agstack.llm.flow.flow import Flow
-from agstack.llm.flow.nodes.iterator_node import IteratorNodeHandler
-from agstack.llm.flow.registry import registry
-from agstack.llm.flow.tool import Tool
+from agstack.genai.flow.context import FlowContext
+from agstack.genai.flow.flow import Flow
+from agstack.genai.flow.nodes.iterator_node import IteratorNodeHandler
+from agstack.genai.flow.registry import registry
+from agstack.genai.flow.tool import Tool
 
 
 def run(coro):
@@ -703,8 +703,8 @@ class TestAgentInstructionsInjection:
 
     def test_instructions_passthrough_via_kwargs(self):
         """instructions 字段通过 _create_agent kwargs 机制传递到 Agent"""
-        from agstack.llm.flow.agent import Agent
-        from agstack.llm.flow.nodes.agent_node import AgentNodeHandler
+        from agstack.genai.flow.agent import Agent
+        from agstack.genai.flow.nodes.agent_node import AgentNodeHandler
 
         # 注册一个测试 agent
         class TestAgent(Agent):
@@ -726,8 +726,8 @@ class TestAgentInstructionsInjection:
 
     def test_instructions_literal_string(self):
         """instructions 字段为字面量字符串"""
-        from agstack.llm.flow.agent import Agent
-        from agstack.llm.flow.nodes.agent_node import AgentNodeHandler
+        from agstack.genai.flow.agent import Agent
+        from agstack.genai.flow.nodes.agent_node import AgentNodeHandler
 
         class LiteralAgent(Agent):
             def __init__(self, **kwargs):
@@ -748,8 +748,8 @@ class TestAgentInstructionsInjection:
 
     def test_no_instructions_uses_default(self):
         """不提供 instructions 时使用 Agent 默认值"""
-        from agstack.llm.flow.agent import Agent
-        from agstack.llm.flow.nodes.agent_node import AgentNodeHandler
+        from agstack.genai.flow.agent import Agent
+        from agstack.genai.flow.nodes.agent_node import AgentNodeHandler
 
         class DefaultAgent(Agent):
             def __init__(self, **kwargs):

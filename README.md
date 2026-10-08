@@ -28,7 +28,7 @@ pip install agstack
 ### Basic Usage
 
 ```python
-from agstack.llm.flow import (
+from agstack.genai.flow import (
     Tool,
     FlowContext,
     registry,
@@ -72,13 +72,10 @@ agstack/
 ├── schema.py          # Base Pydantic models
 ├── registry.py        # Global component registry
 ├── exceptions.py      # Exception hierarchy
-├── llm/              # LLM and AI features
-│   ├── client.py     # LLM client
-│   └── flow/         # Flow execution framework
-│       ├── agent.py  # Agent definition
-│       ├── tool.py   # Tool definition
-│       ├── flow.py   # Flow orchestration
-│       └── ...
+├── genai/            # Generative AI, three one-way layers
+│   ├── llm/          # Model access: client, call hooks, prompts, token counting
+│   ├── flow/         # Flow execution framework (agent / tool / flow / nodes / guards)
+│   └── harness/      # Runtime: ports, events, projection, metering, overflow, context, spill
 ├── fastapi/          # FastAPI integration
 ├── infra/            # Infrastructure components
 │   ├── db/           # Database

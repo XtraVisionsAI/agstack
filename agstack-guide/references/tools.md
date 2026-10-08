@@ -7,7 +7,7 @@ Tools are reusable functions that agents can call to perform specific actions. T
 ## Tool Anatomy
 
 ```python
-from agstack.llm.flow import Tool, FlowContext
+from agstack.genai.flow import Tool, FlowContext
 
 class MyTool(Tool):
     def __init__(self):
@@ -217,7 +217,7 @@ class SearchTool(Tool):
 Tools must be registered before use:
 
 ```python
-from agstack.llm.flow import registry
+from agstack.genai.flow import registry
 
 # Register tool class (instantiated on create)
 registry.register_tool("greeting", GreetingTool)
@@ -235,7 +235,7 @@ registry.register_tool("search", SearchTool, label="Searching...", echo=True)
 ### In Agents
 
 ```python
-from agstack.llm.flow import Agent, registry
+from agstack.genai.flow import Agent, registry
 
 # Create tool list
 tools = registry.create_tools(["greeting", "calculator"])
@@ -254,7 +254,7 @@ class AssistantAgent(Agent):
 ### Directly in Code
 
 ```python
-from agstack.llm.flow import FlowContext, create_tool
+from agstack.genai.flow import FlowContext, create_tool
 
 context = FlowContext()
 
@@ -267,7 +267,7 @@ print(result)  # {"message": "Hello, Alice! Welcome to agstack."}
 ### In Flows
 
 ```python
-from agstack.llm.flow import Flow
+from agstack.genai.flow import Flow
 
 flow = Flow(
     flow_id="my_flow",
@@ -303,7 +303,7 @@ flow = Flow(
 When a tool executes, it produces a `ToolResult` dataclass:
 
 ```python
-from agstack.llm.flow import ToolResult
+from agstack.genai.flow import ToolResult
 
 # ToolResult fields:
 # - name: str          — tool name
@@ -385,7 +385,7 @@ async def risky_operation(self, context: FlowContext, inputs: dict):
 ### When Using Tools Directly
 
 ```python
-from agstack.llm.flow import create_tool
+from agstack.genai.flow import create_tool
 
 try:
     tool = create_tool("my_tool")

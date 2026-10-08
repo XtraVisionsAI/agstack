@@ -12,15 +12,15 @@ from openai import APIError, APITimeoutError, AsyncOpenAI, OpenAI, RateLimitErro
 from openai import Timeout as OpenAITimeout
 from openai.types.chat import ChatCompletionMessageParam
 
-from ..contexts import get_request_id
-from ..exceptions import AppException
+from ...contexts import get_request_id
+from ...exceptions import AppException
 from .hooks import CallMeta, StreamSummary, has_llm_hooks, run_after_call, run_before_call
 
 
 if TYPE_CHECKING:
     from openai.types.chat import ChatCompletion, ChatCompletionChunk
 
-from ..decorators import autoretry
+from ...decorators import autoretry
 
 
 logger = logging.getLogger(__name__)

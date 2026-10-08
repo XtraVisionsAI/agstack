@@ -1,12 +1,12 @@
 # Harness Runtime (2.3.0+)
 
-`agstack.llm.harness` collects runtime pieces that are model-, table- and product-agnostic. Storage is injected by the
+`agstack.genai.harness` collects runtime pieces that are model-, table- and product-agnostic. Storage is injected by the
 application through ports; agstack itself never touches a database or file system.
 
 ## Ports (SPI)
 
 ```python
-from agstack.llm.harness import register_ports, get_ports, LogEvent, SessionLog, SpillStore, SpillOwner, SpillRef
+from agstack.genai.harness import register_ports, get_ports, LogEvent, SessionLog, SpillStore, SpillOwner, SpillRef
 
 register_ports(session_log=MySessionLog(), spill=MySpillStore(), usage=my_usage_sink)
 get_ports().spill          # None when not registered — consumers degrade gracefully
@@ -26,8 +26,8 @@ summary, fold, attempt, system_snapshot, phase_marker). `clear_ports()` resets e
 
 ```python
 from functools import partial
-from agstack.llm.token import count_tokens
-from agstack.llm.harness import truncate_middle, clamp_results
+from agstack.genai.llm.token import count_tokens
+from agstack.genai.harness import truncate_middle, clamp_results
 
 counter = partial(count_tokens, model="qwen3")
 text = truncate_middle(text, max_tokens=4000, count_tokens=counter)             # keep head + tail, insert a size marker
@@ -40,7 +40,7 @@ fits; the caller reports `dropped` to the model explicitly. Limits are policy an
 ## Spill hook
 
 ```python
-from agstack.llm.harness import SpillHook, SpillPolicy, SpillOwner
+from agstack.genai.harness import SpillHook, SpillPolicy, SpillOwner
 
 policy = SpillPolicy(
     max_inline_tokens=6000,
@@ -59,7 +59,7 @@ reshaped.
 ## LLM call hooks (F6)
 
 ```python
-from agstack.llm.hooks import LLMCallHook, CallMeta, StreamSummary
+from agstack.genai.llm.hooks import LLMCallHook, CallMeta, StreamSummary
 
 class Compressor(LLMCallHook):
     async def before_call(self, messages, tools, meta: CallMeta):   # may rewrite the message list; exceptions fail closed
@@ -82,7 +82,7 @@ is a free-form dict for hook/tool side information that is not fed to the model.
 
 ## Agent guards (2.4)
 
-`agstack.llm.flow.guards`: mechanism in the library, policy in the app. `AgentGuards(capped_family, cap, checks, hint,
+`agstack.genai.flow.guards`: mechanism in the library, policy in the app. `AgentGuards(capped_family, cap, checks, hint,
 count_tokens, fold_budget_ratio, fold_renderer, *_kind)` + `GuardState` (per-run counters, `cap` override) +
 `GuardedToolCalls` mixin (placed before `Agent` in the MRO). Pre-execution: duplicate call → family cap → custom
 `checks`; a hit is returned to the model as the tool message and recorded as an execution record shaped like a Tool
@@ -100,3 +100,43 @@ streamed; exhausted turns / empty final turns end with `closing_line(messages)`.
   projects event rows, rewrites bodies, attaches notes, merges consecutive same-role messages. `select_recent(rows,
   limit, is_dialogue_grade)` picks the window newest-first.
 - `tokens`: `clamp_ratio`, `calibration_from_samples`, `calibration_sample`, `CalibratedCounter`, `anchored_estimate`.
+
+## Overflow recovery (3.0)
+
+`agstack.genai.harness.overflow`: `classify_overflow(error= | finish_reason=, prompt_tokens=, completion_tokens=,
+context_length=)` returns `"error"` (backend message says the context window was exceeded; rate limits are excluded),
+`"silent"` (request succeeded but reported `prompt_tokens` exceed the window) or `"length"` (`finish_reason="length"`,
+no output, input ≥ 99% of the window), else `None`. `OverflowPolicy(compact=, context_length=, max_recoveries=1)`
+is attached to `Agent.overflow` (constructor kwarg or class attribute): when a turn hits one of the three states before
+any text / tool call has been streamed, the agent yields `CUSTOM agent_overflow {agentName, kind, turn}`, awaits the
+app's `compact(context, kind) -> bool` (fold / summarize / shadow `context.history` and the agent's messages), and
+re-sends the same turn once if it returned True. A second overflow, an ineffective compaction or a missing policy
+fall through to the original error. `OVERFLOW_RECORD` is the suggested `tool_name` for the app's execution record.
+
+## Context compression engine (3.0)
+
+`agstack.genai.harness.context`: `ContextEngine(source, summaries, summarize, count, context_length, model, anchor=,
+policy=ContextPolicy(...), session_key=)`. `await engine.build_history(reserved_tokens)` returns the model history for
+one turn: budget = `context_length × (1 − output_ratio) − reserved`; the most recent `recent_limit` rows go out whole
+when they fit (fast path, `engine.history_span` records `{first_id, last_id}` for the next anchor); otherwise an
+existing summary is consumed read-only (`[summary_header]\nrender(content)` + rows after it filled to the remaining
+budget) and a missing / stale summary is handed to `policy.schedule(session_key, engine.refresh_summary)` — the request
+path never calls the model. History tokens use the anchor when valid (same model, anchor tail still in window, anchor
+head at window start or recoverable from the fetched superset) and fall back to estimation otherwise.
+
+The application implements `HistorySource` (`recent(limit) -> (window asc, superset newest-first)`, `after(ref)`,
+`all_rows()`, `count()`, `project(rows)`, `ref_of(row)`) and `SummaryStore` (`latest()`, `save(record)`), and supplies
+`summarize(messages, previous) -> str | None`. `refresh_summary()` does a full summary (rows up to the last
+`keep_recent`) when none exists and the row count reaches `summary_min_messages`, or an incremental one (new rows since
+the summary, `previous` = old content) once `incremental_threshold` new rows accumulate. `schedule_once(key, factory)` is
+the default scheduler (per-key dedup, empty `contextvars.Context`); `fill_to_budget(messages, budget, count,
+user_ratio=)` is the two-pass fill (users first) usable on its own.
+
+## Package layout since 3.0
+
+The generative-AI layers live under `agstack.genai` with one-way dependencies: `agstack.genai.llm` keeps model access only
+(`client`, `hooks`, `prompts`, `token`); `agstack.genai.flow` is orchestration (depends on llm); `agstack.genai.harness` is the
+runtime (depends on llm and flow). The 2.x paths `agstack.llm`, `agstack.llm.flow` and `agstack.llm.harness` are gone — a
+breaking change shipped with the major, no aliases. `LLMCallHook` stays in `agstack.genai.llm.hooks` (the client weaves it in
+and must not depend on harness) and is re-exported from `agstack.genai.harness`. `harness.tokens` is renamed
+`harness.metering` (calibration and anchors), distinct from `llm.token` (tiktoken counting).

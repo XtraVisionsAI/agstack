@@ -1,6 +1,6 @@
 #  Copyright (c) 2020-2026 XtraVisions, All rights reserved.
 
-"""AgentGuards（agstack.llm.flow.guards）验收用例
+"""AgentGuards（agstack.genai.flow.guards）验收用例
 
 机制在库、策略在应用：受上限工具族 / 自定义规则 / 折叠渲染 / 提示 / 文案全由 AgentGuards 给；
 守卫动作写与 Tool 管线同形的执行记录；buffer_plan_text 把调工具前的过程话语记为计划不放流。
@@ -11,10 +11,10 @@ from unittest.mock import patch
 
 import pytest
 
-from agstack.llm.flow.agent import Agent
-from agstack.llm.flow.context import FlowContext
-from agstack.llm.flow.event import EventType
-from agstack.llm.flow.guards import (
+from agstack.genai.flow.agent import Agent
+from agstack.genai.flow.context import FlowContext
+from agstack.genai.flow.event import EventType
+from agstack.genai.flow.guards import (
     GUARD_DUPLICATE,
     PLAN_RECORD,
     AgentGuards,
@@ -26,8 +26,8 @@ from agstack.llm.flow.guards import (
     fold_tool_messages,
     note_tool_call,
 )
-from agstack.llm.flow.registry import registry
-from agstack.llm.flow.tool import Tool
+from agstack.genai.flow.registry import registry
+from agstack.genai.flow.tool import Tool
 from tests.test_flow_error_semantics import (
     FakeStreamClient,
     _collect,
@@ -111,7 +111,7 @@ def _tool(name: str, text: str = "r") -> Tool:
     return Tool(name, "d", lambda c, i: {"text": text})
 
 
-@patch("agstack.llm.flow.agent.get_llm_client")
+@patch("agstack.genai.flow.agent.get_llm_client")
 def test_mixin_blocks_duplicate_and_records_trace(mock_client):
     turn1 = [_tool_call_chunk("c1", "search", '{"q":1}'), _finish_chunk("tool_calls")]
     turn2 = [_tool_call_chunk("c2", "search", '{"q":1}'), _finish_chunk("tool_calls")]
@@ -136,7 +136,7 @@ def test_mixin_blocks_duplicate_and_records_trace(mock_client):
     assert guard_rec["success"] and guard_rec["tool_args"]["tool"] == "search" and guard_rec["duration_ms"] == 0
 
 
-@patch("agstack.llm.flow.agent.get_llm_client")
+@patch("agstack.genai.flow.agent.get_llm_client")
 def test_mixin_folds_when_over_budget(mock_client):
     turns = [[_tool_call_chunk(f"c{i}", "t", f'{{"i":{i}}}'), _finish_chunk("tool_calls")] for i in range(3)]
     turns.append([_text_chunk("done"), _finish_chunk()])
@@ -153,7 +153,7 @@ def test_mixin_folds_when_over_budget(mock_client):
     assert any(r["tool_name"] == "guard_fold_results" for r in ctx.execution_records)
 
 
-@patch("agstack.llm.flow.agent.get_llm_client")
+@patch("agstack.genai.flow.agent.get_llm_client")
 def test_mixin_without_counter_never_folds(mock_client):
     turns = [[_tool_call_chunk(f"c{i}", "t", f'{{"i":{i}}}'), _finish_chunk("tool_calls")] for i in range(3)]
     turns.append([_text_chunk("done"), _finish_chunk()])
@@ -168,7 +168,7 @@ def test_mixin_without_counter_never_folds(mock_client):
 # ── buffer_plan_text ──
 
 
-@patch("agstack.llm.flow.agent.get_llm_client")
+@patch("agstack.genai.flow.agent.get_llm_client")
 def test_plan_text_recorded_not_streamed(mock_client):
     turn1 = [_text_chunk("先查一下"), _tool_call_chunk("c1", "t", "{}"), _finish_chunk("tool_calls")]
     turn2 = [_text_chunk("答案"), _finish_chunk()]
@@ -182,7 +182,7 @@ def test_plan_text_recorded_not_streamed(mock_client):
     assert plan["result"] == "先查一下" and plan["tool_args"] == {"next_tool": "t", "streamed": False}
 
 
-@patch("agstack.llm.flow.agent.get_llm_client")
+@patch("agstack.genai.flow.agent.get_llm_client")
 def test_plan_text_streams_past_buffer_threshold(mock_client):
     long = "很长的开场" * 10
     turn1 = [_text_chunk(long), _text_chunk("尾"), _tool_call_chunk("c1", "t", "{}"), _finish_chunk("tool_calls")]
@@ -197,7 +197,7 @@ def test_plan_text_streams_past_buffer_threshold(mock_client):
     assert plan["tool_args"]["streamed"] is True and plan["summary"].startswith("（已展示给用户）")
 
 
-@patch("agstack.llm.flow.agent.get_llm_client")
+@patch("agstack.genai.flow.agent.get_llm_client")
 def test_plan_text_closing_line_on_truncation(mock_client):
     turn = [_text_chunk("再查"), _tool_call_chunk("c1", "t", "{}"), _finish_chunk("tool_calls")]
     mock_client.return_value = FakeStreamClient([turn])
@@ -219,7 +219,7 @@ def test_plan_text_closing_line_on_truncation(mock_client):
     assert out["truncated"] and out["result"] == "找到了资料但没整理完"
 
 
-@patch("agstack.llm.flow.agent.get_llm_client")
+@patch("agstack.genai.flow.agent.get_llm_client")
 def test_plan_text_empty_final_uses_empty_line(mock_client):
     mock_client.return_value = FakeStreamClient([[_finish_chunk()]])
     agent = Agent(name="a", instructions="x", max_turns=2)

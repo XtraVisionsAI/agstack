@@ -8,7 +8,7 @@ from uuid import uuid4
 
 from openai.types.chat import ChatCompletionMessageParam
 
-from ...client import get_llm_client
+from ...llm.client import get_llm_client
 from .. import event
 from ..context import Usage
 from .base import NodeHandler

@@ -9,9 +9,9 @@ from uuid import uuid4
 
 import pytest
 
-from agstack.llm.flow.context import FlowContext
-from agstack.llm.flow.tool import Tool, ToolHook, ToolResult, clear_tool_hooks, register_tool_hook
-from agstack.llm.harness import SpillHook, SpillOwner, SpillPolicy, SpillRef, clear_ports, register_ports
+from agstack.genai.flow.context import FlowContext
+from agstack.genai.flow.tool import Tool, ToolHook, ToolResult, clear_tool_hooks, register_tool_hook
+from agstack.genai.harness import SpillHook, SpillOwner, SpillPolicy, SpillRef, clear_ports, register_ports
 
 
 @pytest.fixture(autouse=True)

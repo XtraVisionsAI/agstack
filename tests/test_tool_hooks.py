@@ -12,11 +12,11 @@ from unittest.mock import patch
 
 import pytest
 
-from agstack.llm.flow.agent import Agent
-from agstack.llm.flow.context import FlowContext
-from agstack.llm.flow.event import EventType
-from agstack.llm.flow.registry import registry
-from agstack.llm.flow.tool import Deny, Tool, ToolHook, ToolResult
+from agstack.genai.flow.agent import Agent
+from agstack.genai.flow.context import FlowContext
+from agstack.genai.flow.event import EventType
+from agstack.genai.flow.registry import registry
+from agstack.genai.flow.tool import Deny, Tool, ToolHook, ToolResult
 from tests.test_flow_error_semantics import (
     FakeStreamClient,
     _collect,
@@ -92,7 +92,7 @@ class TestPreExecute:
         assert result.success is False
         assert "gate crashed" in (result.error or "")
 
-    @patch("agstack.llm.flow.agent.get_llm_client")
+    @patch("agstack.genai.flow.agent.get_llm_client")
     def test_deny_feeds_model_without_breaking_loop(self, mock_get_client):
         """agent 循环里被拒绝：模型收到失败 tool message，flow 不中断，下一轮照常"""
 

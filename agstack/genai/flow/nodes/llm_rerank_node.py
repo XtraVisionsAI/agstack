@@ -4,7 +4,7 @@
 
 from typing import TYPE_CHECKING, Any
 
-from ...client import get_llm_client
+from ...llm.client import get_llm_client
 from .base import NodeHandler
 
 

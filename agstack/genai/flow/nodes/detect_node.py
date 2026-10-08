@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any
 
 from openai.types.chat import ChatCompletionMessageParam
 
-from ...client import get_llm_client
+from ...llm.client import get_llm_client
 from ..context import Usage
 from .base import NodeHandler
 

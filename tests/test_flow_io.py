@@ -5,9 +5,9 @@
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from agstack.llm.flow.context import FlowContext
-from agstack.llm.flow.flow import Flow
-from agstack.llm.flow.tool import Tool
+from agstack.genai.flow.context import FlowContext
+from agstack.genai.flow.flow import Flow
+from agstack.genai.flow.tool import Tool
 
 
 # ── FlowContext ──
@@ -184,7 +184,7 @@ class TestNodeHandlerResolveInputs:
     """NodeHandler.resolve_inputs 测试"""
 
     def test_resolve_with_refs(self):
-        from agstack.llm.flow.nodes.base import NodeHandler
+        from agstack.genai.flow.nodes.base import NodeHandler
 
         handler = NodeHandler()
         ctx = FlowContext(variables={"lang": "zh"})
@@ -208,7 +208,7 @@ class TestPythonNodeHandler:
     """Python 节点返回 dict 测试"""
 
     def test_returns_dict_not_json_string(self):
-        from agstack.llm.flow.nodes.python_node import PythonNodeHandler
+        from agstack.genai.flow.nodes.python_node import PythonNodeHandler
 
         handler = PythonNodeHandler()
         ctx = FlowContext()
@@ -225,7 +225,7 @@ class TestPythonNodeHandler:
         assert result == {"sum": 0}
 
     def test_with_inputs_ref(self):
-        from agstack.llm.flow.nodes.python_node import PythonNodeHandler
+        from agstack.genai.flow.nodes.python_node import PythonNodeHandler
 
         handler = PythonNodeHandler()
         ctx = FlowContext()
@@ -248,9 +248,9 @@ class TestPythonNodeHandler:
 class TestDetectNodeHandler:
     """Detect 节点返回 {"choice": ...} 测试"""
 
-    @patch("agstack.llm.flow.nodes.detect_node.get_llm_client")
+    @patch("agstack.genai.flow.nodes.detect_node.get_llm_client")
     def test_returns_choice_dict(self, mock_get_client):
-        from agstack.llm.flow.nodes.detect_node import DetectNodeHandler
+        from agstack.genai.flow.nodes.detect_node import DetectNodeHandler
 
         # mock LLM response
         mock_response = MagicMock()
@@ -280,9 +280,9 @@ class TestDetectNodeHandler:
         assert isinstance(result, dict)
         assert result == {"choice": "qa"}
 
-    @patch("agstack.llm.flow.nodes.detect_node.get_llm_client")
+    @patch("agstack.genai.flow.nodes.detect_node.get_llm_client")
     def test_dynamic_instruction_and_options(self, mock_get_client):
-        from agstack.llm.flow.nodes.detect_node import DetectNodeHandler
+        from agstack.genai.flow.nodes.detect_node import DetectNodeHandler
 
         mock_response = MagicMock()
         mock_choice = MagicMock()
@@ -316,9 +316,9 @@ class TestDetectNodeHandler:
         result = asyncio.get_event_loop().run_until_complete(handler.execute(node, ctx))
         assert result == {"choice": "billing"}
 
-    @patch("agstack.llm.flow.nodes.detect_node.get_llm_client")
+    @patch("agstack.genai.flow.nodes.detect_node.get_llm_client")
     def test_dynamic_model_and_temperature(self, mock_get_client):
-        from agstack.llm.flow.nodes.detect_node import DetectNodeHandler
+        from agstack.genai.flow.nodes.detect_node import DetectNodeHandler
 
         mock_response = MagicMock()
         mock_choice = MagicMock()
@@ -357,9 +357,9 @@ class TestDetectNodeHandler:
 class TestLLMChatNodeHandler:
     """LLM Chat 节点测试"""
 
-    @patch("agstack.llm.flow.nodes.llm_chat_node.get_llm_client")
+    @patch("agstack.genai.flow.nodes.llm_chat_node.get_llm_client")
     def test_returns_dict(self, mock_get_client):
-        from agstack.llm.flow.nodes.llm_chat_node import LLMChatNodeHandler
+        from agstack.genai.flow.nodes.llm_chat_node import LLMChatNodeHandler
 
         mock_response = MagicMock()
         mock_choice = MagicMock()
@@ -386,7 +386,7 @@ class TestLLMChatNodeHandler:
         assert result == {"result": "Hello!"}
 
     def test_build_prompt_json_dumps_non_str(self):
-        from agstack.llm.flow.nodes.llm_chat_node import LLMChatNodeHandler
+        from agstack.genai.flow.nodes.llm_chat_node import LLMChatNodeHandler
 
         handler = LLMChatNodeHandler()
         resolved = {"items": ["a", "b", "c"], "count": 3}
@@ -395,16 +395,16 @@ class TestLLMChatNodeHandler:
         assert "3" in result
 
     def test_build_prompt_str_passthrough(self):
-        from agstack.llm.flow.nodes.llm_chat_node import LLMChatNodeHandler
+        from agstack.genai.flow.nodes.llm_chat_node import LLMChatNodeHandler
 
         handler = LLMChatNodeHandler()
         resolved = {"name": "Alice"}
         result = handler._build_prompt("Hello {name}!", resolved)
         assert result == "Hello Alice!"
 
-    @patch("agstack.llm.flow.nodes.llm_chat_node.get_llm_client")
+    @patch("agstack.genai.flow.nodes.llm_chat_node.get_llm_client")
     def test_system_prompt_variable_substitution(self, mock_get_client):
-        from agstack.llm.flow.nodes.llm_chat_node import LLMChatNodeHandler
+        from agstack.genai.flow.nodes.llm_chat_node import LLMChatNodeHandler
 
         mock_response = MagicMock()
         mock_choice = MagicMock()
@@ -437,9 +437,9 @@ class TestLLMChatNodeHandler:
         assert len(system_msg) == 1
         assert system_msg[0]["content"] == "You speak Chinese"
 
-    @patch("agstack.llm.flow.nodes.llm_chat_node.get_llm_client")
+    @patch("agstack.genai.flow.nodes.llm_chat_node.get_llm_client")
     def test_dynamic_model_temperature_max_tokens(self, mock_get_client):
-        from agstack.llm.flow.nodes.llm_chat_node import LLMChatNodeHandler
+        from agstack.genai.flow.nodes.llm_chat_node import LLMChatNodeHandler
 
         mock_response = MagicMock()
         mock_choice = MagicMock()
@@ -553,7 +553,7 @@ class TestDataFlowIntegration:
 
     def test_python_to_python_via_outputs(self):
         """python 节点 → outputs → 下游 python 节点引用"""
-        from agstack.llm.flow.nodes.python_node import PythonNodeHandler
+        from agstack.genai.flow.nodes.python_node import PythonNodeHandler
 
         handler = PythonNodeHandler()
         ctx = FlowContext()
@@ -584,7 +584,7 @@ class TestDataFlowIntegration:
 
     def test_variables_and_outputs_coexist(self):
         """$v. 和 $o. 可以在同一个 inputs 中共存"""
-        from agstack.llm.flow.nodes.python_node import PythonNodeHandler
+        from agstack.genai.flow.nodes.python_node import PythonNodeHandler
 
         handler = PythonNodeHandler()
         ctx = FlowContext(variables={"multiplier": 3})
@@ -605,9 +605,9 @@ class TestDataFlowIntegration:
 class TestLLMRerankNodeHandler:
     """LLM Rerank 节点动态参数测试"""
 
-    @patch("agstack.llm.flow.nodes.llm_rerank_node.get_llm_client")
+    @patch("agstack.genai.flow.nodes.llm_rerank_node.get_llm_client")
     def test_dynamic_model_and_top_n(self, mock_get_client):
-        from agstack.llm.flow.nodes.llm_rerank_node import LLMRerankNodeHandler
+        from agstack.genai.flow.nodes.llm_rerank_node import LLMRerankNodeHandler
 
         mock_client = AsyncMock()
         mock_client.rerank = AsyncMock(return_value=[(0, 0.95, "doc A"), (1, 0.80, "doc B")])
@@ -636,9 +636,9 @@ class TestLLMRerankNodeHandler:
             "results": [{"index": 0, "score": 0.95, "text": "doc A"}, {"index": 1, "score": 0.80, "text": "doc B"}]
         }
 
-    @patch("agstack.llm.flow.nodes.llm_rerank_node.get_llm_client")
+    @patch("agstack.genai.flow.nodes.llm_rerank_node.get_llm_client")
     def test_static_fallback_still_works(self, mock_get_client):
-        from agstack.llm.flow.nodes.llm_rerank_node import LLMRerankNodeHandler
+        from agstack.genai.flow.nodes.llm_rerank_node import LLMRerankNodeHandler
 
         mock_client = AsyncMock()
         mock_client.rerank = AsyncMock(return_value=[(0, 0.9, "doc A")])
@@ -667,9 +667,9 @@ class TestLLMRerankNodeHandler:
 class TestLLMEmbedNodeHandler:
     """LLM Embed 节点动态参数测试"""
 
-    @patch("agstack.llm.flow.nodes.llm_embed_node.get_llm_client")
+    @patch("agstack.genai.flow.nodes.llm_embed_node.get_llm_client")
     def test_dynamic_model(self, mock_get_client):
-        from agstack.llm.flow.nodes.llm_embed_node import LLMEmbedNodeHandler
+        from agstack.genai.flow.nodes.llm_embed_node import LLMEmbedNodeHandler
 
         mock_client = AsyncMock()
         mock_client.embed = AsyncMock(return_value=[[0.1, 0.2, 0.3]])
@@ -693,9 +693,9 @@ class TestLLMEmbedNodeHandler:
         assert call_args.kwargs["model"] == "text-embedding-3-large"
         assert result == {"embeddings": [[0.1, 0.2, 0.3]]}
 
-    @patch("agstack.llm.flow.nodes.llm_embed_node.get_llm_client")
+    @patch("agstack.genai.flow.nodes.llm_embed_node.get_llm_client")
     def test_static_model_fallback(self, mock_get_client):
-        from agstack.llm.flow.nodes.llm_embed_node import LLMEmbedNodeHandler
+        from agstack.genai.flow.nodes.llm_embed_node import LLMEmbedNodeHandler
 
         mock_client = AsyncMock()
         mock_client.embed = AsyncMock(return_value=[[0.1, 0.2]])

@@ -5,12 +5,12 @@
 from typing import TYPE_CHECKING, Any, AsyncIterator
 from uuid import uuid4
 
-from agstack.llm.flow import event
-from agstack.llm.flow.nodes.base import NodeHandler
+from agstack.genai.flow import event
+from agstack.genai.flow.nodes.base import NodeHandler
 
 
 if TYPE_CHECKING:
-    from agstack.llm.flow.context import FlowContext
+    from agstack.genai.flow.context import FlowContext
 
 
 class EchoNodeHandler(NodeHandler):

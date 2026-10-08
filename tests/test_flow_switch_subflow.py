@@ -6,10 +6,10 @@ import asyncio
 
 import pytest
 
-from agstack.llm.flow.context import FlowContext
-from agstack.llm.flow.flow import Flow
-from agstack.llm.flow.nodes.subflow_node import SubflowNodeHandler
-from agstack.llm.flow.nodes.switch_node import SwitchNodeHandler
+from agstack.genai.flow.context import FlowContext
+from agstack.genai.flow.flow import Flow
+from agstack.genai.flow.nodes.subflow_node import SubflowNodeHandler
+from agstack.genai.flow.nodes.switch_node import SwitchNodeHandler
 
 
 def run(coro):
@@ -125,7 +125,7 @@ class TestSubflowNode:
             edges=[],
         )
 
-        from agstack.llm.flow.registry import registry
+        from agstack.genai.flow.registry import registry
 
         registry._flows["simple_flow"] = lambda **kwargs: child_flow
 
@@ -159,7 +159,7 @@ class TestSubflowNode:
             edges=[],
         )
 
-        from agstack.llm.flow.registry import registry
+        from agstack.genai.flow.registry import registry
 
         registry._flows["echo_flow"] = lambda **kwargs: child_flow
 
@@ -181,7 +181,7 @@ class TestSubflowNode:
 
     def test_subflow_not_found(self):
         """找不到子 flow 时抛出 FlowError"""
-        from agstack.llm.flow.exceptions import FlowError
+        from agstack.genai.flow.exceptions import FlowError
 
         ctx = FlowContext()
         node = {
@@ -232,7 +232,7 @@ class TestSubflowNode:
             edges=[{"source": "py1", "target": None}],
         )
 
-        from agstack.llm.flow.registry import registry
+        from agstack.genai.flow.registry import registry
 
         registry._flows["stream_flow"] = lambda **kwargs: child_flow
 

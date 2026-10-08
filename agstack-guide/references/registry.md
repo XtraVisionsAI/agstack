@@ -9,7 +9,7 @@ The Registry is the core pattern in agstack that manages component lifecycle —
 AgStack uses a single `FlowRegistry` class:
 
 ```python
-from agstack.llm.flow import registry  # FlowRegistry instance
+from agstack.genai.flow import registry  # FlowRegistry instance
 ```
 
 The registry manages four component types: **tools**, **agents**, **flows**, and **node handlers**.
@@ -19,7 +19,7 @@ The registry manages four component types: **tools**, **agents**, **flows**, and
 ### Register Tools
 
 ```python
-from agstack.llm.flow import registry
+from agstack.genai.flow import registry
 
 # Register a tool class (instantiated on create)
 class MyTool(Tool):
@@ -71,7 +71,7 @@ registry.register_flow("onboarding", lambda: build_onboarding_flow())
 ### Register Node Handlers
 
 ```python
-from agstack.llm.flow import register_node_handler
+from agstack.genai.flow import register_node_handler
 
 register_node_handler("my_type", MyHandler())
 ```
@@ -99,7 +99,7 @@ registry.register_node_handler(node_type: str, handler)
 Returns `None` if component doesn't exist:
 
 ```python
-from agstack.llm.flow import registry
+from agstack.genai.flow import registry
 
 # Create tool - returns None if not found
 tool = registry.create_tool("my_tool")
@@ -122,7 +122,7 @@ flow = registry.create_flow("my_flow")
 Raises `RuntimeError` if component doesn't exist:
 
 ```python
-from agstack.llm.flow import create_tool, create_agent
+from agstack.genai.flow import create_tool, create_agent
 
 # Raises RuntimeError if not registered
 tool = create_tool("my_tool")
@@ -221,7 +221,7 @@ agent = registry.create_agent("chat", model="gpt-4o-mini", temperature=0.3)
 
 ```python
 # components/registry.py
-from agstack.llm.flow import registry
+from agstack.genai.flow import registry
 
 def register_all_components():
     """Register all application components at startup"""
@@ -315,7 +315,7 @@ def register_for_environment():
 
 ```python
 import pytest
-from agstack.llm.flow import registry
+from agstack.genai.flow import registry
 
 @pytest.fixture
 def mock_registry():
@@ -384,7 +384,7 @@ tool = create_tool("optional_feature")  # Crashes if not registered
 
 ```python
 # tools/__init__.py
-from agstack.llm.flow import registry
+from agstack.genai.flow import registry
 from .search import WebSearchTool
 from .database import DatabaseTool
 
@@ -393,7 +393,7 @@ def register():
     registry.register_tool("database", DatabaseTool)
 
 # agents/__init__.py
-from agstack.llm.flow import registry
+from agstack.genai.flow import registry
 from .chat import ChatAgent
 
 def register():
@@ -439,7 +439,7 @@ registry.register_tool("db_tool", lambda: DatabaseTool(db=db_pool))
 
 **Key Takeaways**:
 
-1. **Single Registry**: Use `from agstack.llm.flow import registry`
+1. **Single Registry**: Use `from agstack.genai.flow import registry`
 2. **Registration**: Register once at startup; use lambda for deferred init
 3. **Creation**: `registry.create_*()` for safety, `create_*()` for speed
 4. **Organization**: Centralize registration, organize by module

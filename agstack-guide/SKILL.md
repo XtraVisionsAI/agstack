@@ -20,8 +20,8 @@ pip install agstack
 ### Basic Setup
 
 ```python
-from agstack.llm.client import setup_llm_client
-from agstack.llm.flow import Agent, Tool, Flow, FlowContext, registry
+from agstack.genai.llm.client import setup_llm_client
+from agstack.genai.flow import Agent, Tool, Flow, FlowContext, registry
 
 # Configure LLM client
 setup_llm_client(
@@ -47,7 +47,7 @@ All components use a **Registry Pattern** for management and **FlowContext** for
 Create intelligent agents powered by LLMs:
 
 ```python
-from agstack.llm.flow import Agent, registry
+from agstack.genai.flow import Agent, registry
 
 class ChatAgent(Agent):
     def __init__(self):
@@ -62,7 +62,7 @@ class ChatAgent(Agent):
 registry.register_agent("chat", ChatAgent)
 
 # Use agent
-from agstack.llm.flow import FlowContext, create_agent
+from agstack.genai.flow import FlowContext, create_agent
 
 context = FlowContext(flow_id="my-session")
 context.set_variable("query", "Hello!")
@@ -78,7 +78,7 @@ response = await agent.run(context)
 Create reusable functions for agents:
 
 ```python
-from agstack.llm.flow import Tool, FlowContext, registry
+from agstack.genai.flow import Tool, FlowContext, registry
 
 class GreetingTool(Tool):
     def __init__(self):
@@ -110,7 +110,7 @@ registry.register_tool("greeting", GreetingTool)
 Orchestrate multi-step workflows:
 
 ```python
-from agstack.llm.flow import Flow
+from agstack.genai.flow import Flow
 
 flow = Flow(
     flow_id="my_workflow",
@@ -238,7 +238,7 @@ async for evt in agent.stream(context):
 All components use centralized registration:
 
 ```python
-from agstack.llm.flow import registry, create_agent, create_tool
+from agstack.genai.flow import registry, create_agent, create_tool
 
 # Register components (pass class or factory)
 registry.register_agent("name", AgentClass)
@@ -285,7 +285,7 @@ usage = context.usage  # Usage dataclass
 Use AG-UI protocol events for streaming:
 
 ```python
-from agstack.llm.flow import EventType
+from agstack.genai.flow import EventType
 
 async for evt in agent.stream(context):
     event_type = evt.get("type")
@@ -327,7 +327,7 @@ data = user.model_dump()
 ## Error Handling
 
 ```python
-from agstack.llm.flow.exceptions import (
+from agstack.genai.flow.exceptions import (
     FlowError,
     ToolExecutionError,
     AgentError,
@@ -361,7 +361,7 @@ from ..client import get_llm_client
 
 # Incorrect
 from agstack.schema import BaseSchema
-from agstack.llm.client import get_llm_client
+from agstack.genai.llm.client import get_llm_client
 ```
 
 ### Type Hints
@@ -369,7 +369,7 @@ from agstack.llm.client import get_llm_client
 Always add type hints:
 
 ```python
-from agstack.llm.flow import FlowContext
+from agstack.genai.flow import FlowContext
 
 async def my_function(context: FlowContext, inputs: dict[str, str]) -> dict[str, str]:
     result: str = inputs.get("key", "")
@@ -466,7 +466,7 @@ research_flow = Flow(
 
 ```python
 from agstack.fastapi import setup_fastapi
-from agstack.llm.flow import FlowContext, create_agent
+from agstack.genai.flow import FlowContext, create_agent
 
 app = setup_fastapi(
     title="My App",
@@ -494,7 +494,7 @@ async def chat(request: ChatRequest):
 
 ```python
 from agstack.fastapi.sse import EventSourceResponse
-from agstack.llm.flow import EventType
+from agstack.genai.flow import EventType
 
 @app.post("/chat/stream")
 async def chat_stream(request: ChatRequest):
@@ -590,7 +590,7 @@ AgStack supports the following built-in node types for flows:
 FlowTrace provides a complete execution trace after flow completion:
 
 ```python
-from agstack.llm.flow import FlowTrace, NodeTrace, EdgeTrace
+from agstack.genai.flow import FlowTrace, NodeTrace, EdgeTrace
 
 context = FlowContext()
 result = await flow.run(context)
@@ -658,7 +658,7 @@ flow = Flow(
 ### Custom Node Handlers
 
 ```python
-from agstack.llm.flow import NodeHandler, register_node_handler
+from agstack.genai.flow import NodeHandler, register_node_handler
 
 class MyCustomHandler(NodeHandler):
     node_type = "my_custom"
