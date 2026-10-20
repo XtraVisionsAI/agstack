@@ -34,6 +34,9 @@ class NodeTrace:
     tool_calls: list[dict[str, Any]] = field(default_factory=list)
     messages: list[dict[str, Any]] | None = None
 
+    #: failed attempts before the final one (retry policy): ``{"attempt", "error", "tool_calls"?}``
+    attempts: list[dict[str, Any]] = field(default_factory=list)
+
 
 @dataclass
 class EdgeTrace:
@@ -121,6 +124,19 @@ class FlowTrace:
             trace.tool_calls = tool_calls
         if messages is not None:
             trace.messages = messages
+
+    def record_node_attempt(
+        self, node_id: str, attempt: int, error: str, *, tool_calls: list[dict[str, Any]] | None = None
+    ) -> bool:
+        """Record a failed attempt on a running node; returns False when the node is not being traced"""
+        trace = self._active_nodes.get(self._qualify_id(node_id))
+        if trace is None:
+            return False
+        entry: dict[str, Any] = {"attempt": attempt, "error": error}
+        if tool_calls:
+            entry["tool_calls"] = tool_calls
+        trace.attempts.append(entry)
+        return True
 
     def record_edge(
         self,

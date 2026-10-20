@@ -45,6 +45,13 @@ def _usage_snapshot(usage: Usage) -> tuple[int, int, int]:
     return (usage.prompt_tokens, usage.completion_tokens, usage.total_tokens)
 
 
+def _failure_text(error: BaseException) -> str:
+    """Error text recorded on a node; cancellation and stream close get a stable code"""
+    if isinstance(error, asyncio.CancelledError | GeneratorExit):
+        return "CANCELLED"
+    return str(error) or type(error).__name__
+
+
 def _usage_delta(usage: Usage, before: tuple[int, int, int]) -> Usage | None:
     """节点执行前后的用量差值；全零返回 None，避免 trace 体积膨胀"""
     delta = Usage(
@@ -266,6 +273,11 @@ class Flow:
             except Exception as e:
                 last_error = e
                 if attempt < policy.max_retries:
+                    # the failed attempt's tool records belong to it, not to the next attempt
+                    if node_id in self._active_trace_ids(context):
+                        context.trace.record_node_attempt(
+                            node_id, attempt + 1, str(e), tool_calls=self._take_node_tool_calls(context)
+                        )
                     continue
                 yield event.run_error(
                     message=str(e),
@@ -350,6 +362,34 @@ class Flow:
                     code="UNKNOWN_NODE_TYPE",
                 )
                 raise NodeExecutionError("UNKNOWN_NODE_TYPE", args={"node_type": node_type})
+
+    @staticmethod
+    def _active_trace_ids(context: "FlowContext") -> set[str]:
+        """Unqualified ids of nodes currently open in the trace (current namespace)"""
+        trace = context.trace
+        prefix = "::".join(trace._namespace_stack) + "::" if trace._namespace_stack else ""
+        return {qid[len(prefix) :] for qid in trace._active_nodes if qid.startswith(prefix)}
+
+    @staticmethod
+    def _take_node_tool_calls(context: "FlowContext") -> list[dict[str, Any]] | None:
+        """Tool records produced by the node so far (agent nodes stash theirs in ``_last_node_tool_calls``)"""
+        tool_calls = context.get_variable("_last_node_tool_calls")
+        if tool_calls is not None:
+            context.set_variable("_last_node_tool_calls", None)
+            return tool_calls or None
+        return context.pop_execution_records() or None
+
+    def _close_failed_node(
+        self, context: "FlowContext", node_id: str, usage_before: tuple[int, int, int], error: str
+    ) -> None:
+        """End a node that raised: error, tool records collected so far and usage delta"""
+        context.pop_variable("_last_node_error")
+        context.trace.record_node_end(
+            node_id,
+            error=error,
+            usage=_usage_delta(context.usage, usage_before),
+            tool_calls=self._take_node_tool_calls(context),
+        )
 
     def _find_iterator_fallback(self, source_id: str) -> str | None:
         """查找从 source_id 出发指向 iterator 节点的 edge target"""
@@ -477,7 +517,15 @@ class Flow:
                         context.trace.record_node_end(branch_id, error=str(e))
                         raise
 
-                await asyncio.gather(*[_exec_branch(bid, _pqid) for bid in branches])
+                try:
+                    await asyncio.gather(*[_exec_branch(bid, _pqid) for bid in branches])
+                except BaseException as e:
+                    context.trace.record_node_end(
+                        current_node_id,
+                        error=_failure_text(e),
+                        usage=_usage_delta(context.usage, usage_before),
+                    )
+                    raise
                 merged: dict[str, Any] = {}
                 for bid in branches:
                     branch_result = context.outputs.get(bid, {})
@@ -540,7 +588,12 @@ class Flow:
                             iteration_index=idx,
                         )
                         body_usage_before = _usage_snapshot(context.usage)
-                        body_result = await body_handler.execute(body_node, context)
+                        try:
+                            body_result = await body_handler.execute(body_node, context)
+                        except BaseException as e:
+                            self._close_failed_node(context, body_node_id, body_usage_before, _failure_text(e))
+                            context.trace.record_node_end(current_node_id, error=_failure_text(e))
+                            raise
                         context.set_output(body_node_id, body_result)
                         # 收集 body 节点产生的 execution_records
                         body_tool_calls = context.pop_execution_records()
@@ -591,16 +644,22 @@ class Flow:
                 try:
                     async for evt in self._execute_node_with_retry(node, context, current_node_id):
                         yield evt
-                except (NodeExecutionError, Exception) as e:
+                except Exception as e:
+                    # close the node with its error, tool records and usage before routing / re-raising,
+                    # so the trace never shows a failed node as "ran without error"
+                    self._close_failed_node(context, current_node_id, usage_before, str(e))
                     # 迭代体错误容忍：如果该节点有 edge 指向 iterator，路由回去而非中断 flow
                     iter_target = self._find_iterator_fallback(current_node_id)
                     if iter_target:
                         context.set_variable(f"_iter_{iter_target}_error", str(e))
                         context.set_output(current_node_id, {"error": str(e)})
-                        context.trace.record_node_end(current_node_id, error=str(e))
                         context.set_variable("_prev_node_id", current_node_id)
                         current_node_id = iter_target
                         continue
+                    raise
+                except BaseException as e:
+                    # task cancellation / consumer closing the stream mid-node
+                    self._close_failed_node(context, current_node_id, usage_before, _failure_text(e))
                     raise
 
                 # output_mode: "append" — 合并新输出到历史数组
