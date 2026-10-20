@@ -15,6 +15,7 @@ from openai.types.chat import ChatCompletionMessageParam
 from ...contexts import get_request_id
 from ...exceptions import AppException
 from .hooks import CallMeta, StreamSummary, has_llm_hooks, run_after_call, run_before_call
+from .token import count_with, tokenizer_for
 
 
 if TYPE_CHECKING:
@@ -36,6 +37,7 @@ class UsageEvent:
     :param completion_tokens: 输出 token 数
     :param total_tokens: 总 token 数
     :param duration_ms: 调用耗时（毫秒）
+    :param estimated: 分量为本地分词器估算而非后端实报（流式被中断、未收到末尾 usage 块时）
     """
 
     model: str
@@ -44,6 +46,7 @@ class UsageEvent:
     completion_tokens: int
     total_tokens: int
     duration_ms: int
+    estimated: bool = False
 
 
 UsageCallback = Callable[[UsageEvent], None]
@@ -70,7 +73,7 @@ def _usage_field(usage: Any, key: str) -> int:
     return int(value or 0)
 
 
-def _emit_usage(model: str, kind: str, usage: Any, duration_ms: int) -> None:
+def _emit_usage(model: str, kind: str, usage: Any, duration_ms: int, *, estimated: bool = False) -> None:
     """触发 usage 回调；usage 缺失时各分量记 0（保留 model/duration 供监控）"""
     callback = _usage_callback
     if callback is None:
@@ -84,10 +87,51 @@ def _emit_usage(model: str, kind: str, usage: Any, duration_ms: int) -> None:
                 completion_tokens=_usage_field(usage, "completion_tokens"),
                 total_tokens=_usage_field(usage, "total_tokens"),
                 duration_ms=duration_ms,
+                estimated=estimated,
             )
         )
     except Exception:
         logger.warning("Usage callback failed", exc_info=True)
+
+
+def _collect_delta_text(delta: Any, out: list[str]) -> None:
+    """收集流式增量中的产出文本（正文 / 推理内容 / 工具调用参数），供中断估算"""
+    if delta is None:
+        return
+    for key in ("content", "reasoning_content"):
+        value = getattr(delta, key, None)
+        if isinstance(value, str) and value:
+            out.append(value)
+    for call in getattr(delta, "tool_calls", None) or []:
+        fn = getattr(call, "function", None)
+        if fn is not None:
+            out.append(f"{getattr(fn, 'name', None) or ''}{getattr(fn, 'arguments', None) or ''}")
+
+
+def _messages_text(messages: list[Any]) -> str:
+    """拼接消息中可计数的文本（content 字符串 / text 分片 / tool_calls 参数；图片分片不计）"""
+    parts: list[str] = []
+    for msg in messages:
+        if not isinstance(msg, dict):
+            continue
+        content = msg.get("content")
+        if isinstance(content, str):
+            parts.append(content)
+        elif isinstance(content, list):
+            parts.extend(str(p.get("text") or "") for p in content if isinstance(p, dict) and p.get("type") == "text")
+        for call in msg.get("tool_calls") or []:
+            fn = call.get("function") if isinstance(call, dict) else None
+            if isinstance(fn, dict):
+                parts.append(f"{fn.get('name') or ''} {fn.get('arguments') or ''}")
+    return "\n".join(parts)
+
+
+def _estimate_stream_usage(model: str, messages: list[Any], completion_text: str) -> dict[str, int]:
+    """流式被中断且无实报 usage 时，按模型分词器估算已消耗分量（宁可略估也不记 0）"""
+    tokenizer = tokenizer_for(model)
+    prompt = count_with(tokenizer, _messages_text(messages)) if messages else 0
+    completion = count_with(tokenizer, completion_text) if completion_text else 0
+    return {"prompt_tokens": prompt, "completion_tokens": completion, "total_tokens": prompt + completion}
 
 
 class LLMError(AppException):
@@ -342,9 +386,17 @@ class LLMClient:
         meta: CallMeta | None = None,
         **kwargs: Any,
     ) -> AsyncIterator["ChatCompletionChunk"]:
-        """流式响应"""
+        """流式响应
+
+        usage 在 finally 中保证恰好上报一次：正常结束或已收到末尾 usage 块按实报；
+        被取消 / 消费方提前关闭 / 中途异常且无实报时，按已发送的 prompt 与已产出
+        的增量文本估算（``estimated=True``）——上游已计费的消耗不能因中断而漏账。
+        """
         final_usage = None
         finish_reason: str | None = None
+        started = False
+        completed = False
+        produced: list[str] = []
 
         try:
             # noinspection PyTypeChecker
@@ -358,17 +410,23 @@ class LLMClient:
                 extra_headers={"X-Request-ID": get_request_id()},
                 **kwargs,
             )
+            started = True
 
             async for chunk in stream:
                 # 收集 token 统计（usage 通常在末尾 chunk 返回）
                 if chunk.usage:
                     final_usage = chunk.usage
-                if chunk.choices and chunk.choices[0].finish_reason:
-                    finish_reason = chunk.choices[0].finish_reason
+                if chunk.choices:
+                    choice = chunk.choices[0]
+                    if choice.finish_reason:
+                        finish_reason = choice.finish_reason
+                    if final_usage is None:  # 仅为中断估算留底，已有实报即不再累积
+                        _collect_delta_text(choice.delta, produced)
 
                 yield chunk
 
             # 记录指标
+            completed = True
             duration_ms = int((time.time() - start_time) * 1000)
             total_tokens = final_usage.total_tokens if final_usage else 0
             logger.info(f"LLM stream: model={model}, tokens={total_tokens}, duration={duration_ms}ms")
@@ -383,6 +441,24 @@ class LLMClient:
         except Exception as e:
             logger.error(f"LLM stream error: {e}")
             raise LLMError("LLM_STREAM_ERROR", {"error": str(e)}) from e
+
+        finally:
+            # 流已建立（请求已被后端受理）但未走到正常收尾（取消 / aclose / 异常）：
+            # 此处只做同步上报，不 await；建流前即失败的请求未产生消耗，与非流式失败口径一致不记账
+            if started and not completed:
+                duration_ms = int((time.time() - start_time) * 1000)
+                if final_usage is not None:
+                    _emit_usage(model, usage_kind, final_usage, duration_ms)
+                else:
+                    try:
+                        estimate = _estimate_stream_usage(model, list(messages), "".join(produced))
+                    except Exception:
+                        logger.warning("Stream usage estimation failed", exc_info=True)
+                        estimate = None
+                    logger.info(
+                        f"LLM stream interrupted: model={model}, estimated={estimate}, duration={duration_ms}ms"
+                    )
+                    _emit_usage(model, usage_kind, estimate, duration_ms, estimated=estimate is not None)
 
     async def embed(self, texts: list[str], model: str) -> list[list[float]]:
         """文本向量化（异步）
@@ -578,9 +654,8 @@ class LLMClient:
             response.raise_for_status()
             data = response.json()
 
-            # 上报用量（仅后端返回 usage 时）
-            if usage := data.get("usage"):
-                _emit_usage(model, "rerank", usage, int((time.time() - start) * 1000))
+            # 上报用量：后端不返回 usage 时也上报（token 记 0），次数是按次计价的依据
+            _emit_usage(model, "rerank", data.get("usage"), int((time.time() - start) * 1000))
 
             # 解析响应
             results = []
@@ -643,9 +718,8 @@ class LLMClient:
             response.raise_for_status()
             data = response.json()
 
-            # 上报用量（仅后端返回 usage 时）
-            if usage := data.get("usage"):
-                _emit_usage(model, "rerank", usage, int((time.time() - start) * 1000))
+            # 上报用量：后端不返回 usage 时也上报（token 记 0），次数是按次计价的依据
+            _emit_usage(model, "rerank", data.get("usage"), int((time.time() - start) * 1000))
 
             results = []
             for item in data.get("results", []):
