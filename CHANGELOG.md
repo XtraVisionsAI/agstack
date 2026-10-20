@@ -1,3 +1,9 @@
+## 3.3.0 (2026-10-20)
+
+### Feat
+
+- **flow**: close trace nodes on failure and cancellation, record retry attempts
+
 ## 3.2.0 (2026-10-08)
 
 ### Feat
