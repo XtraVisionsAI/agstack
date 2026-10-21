@@ -1,3 +1,9 @@
+## 3.3.1 (2026-10-21)
+
+### Fix
+
+- **llm**: report usage for interrupted streams and rerank without usage
+
 ## 3.3.0 (2026-10-20)
 
 ### Feat
