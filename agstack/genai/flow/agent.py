@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any, AsyncIterator
 from uuid import uuid4
 
 from ..harness.overflow import OverflowPolicy, classify_overflow, usage_tokens
+from ..harness.retry import RETRY_EVENT, TransientRetry, record_retry, retry_payload
 from ..llm.client import get_llm_client
 from . import event
 from .context import Usage
@@ -25,6 +26,8 @@ class Agent:
 
     #: 上下文溢出恢复策略（harness.overflow；None 不恢复）。子类可按类属性给缺省，构造参数 ``overflow`` 覆盖
     overflow: OverflowPolicy | None = None
+    #: 瞬时故障重发策略（harness.retry；None 不重发）。子类可按类属性给缺省，构造参数 ``retry`` 覆盖
+    retry: TransientRetry | None = None
 
     def __init__(
         self,
@@ -42,6 +45,7 @@ class Agent:
         label: str | None = None,
         echo: bool = False,
         overflow: OverflowPolicy | None = None,
+        retry: TransientRetry | None = None,
     ):
         """初始化 Agent
 
@@ -58,6 +62,8 @@ class Agent:
         :param label: 面向用户的展示名称（控制 STEP 进度事件可见性）
         :param echo: 是否转发 TEXT_MESSAGE 给用户
         :param overflow: 上下文溢出恢复策略（三态判定命中后调 ``compact`` 压缩并同轮重发一次，见 harness.overflow）
+        :param retry: 瞬时故障重发策略（请求在放出任何内容前因超时 / 连接中断 / 限流 / 5xx 失败时等待后同轮重发，
+            与溢出恢复分开计数，见 harness.retry）
         """
         self.name = name
         self.instructions = instructions or f"You are {name}, a helpful AI assistant."
@@ -73,6 +79,8 @@ class Agent:
         self.echo = echo
         if overflow is not None:
             self.overflow = overflow
+        if retry is not None:
+            self.retry = retry
 
     def get_system_message(self) -> dict[str, Any]:
         """获取系统消息"""
@@ -318,6 +326,7 @@ class Agent:
         # Agent 循环
         assistant_content = ""
         recoveries = 0  # 溢出恢复次数（每次运行上限 overflow.max_recoveries）
+        retries = 0  # 瞬时故障重发次数（每次运行上限 retry.max_retries，与溢出恢复分开计数）
         for turn in range(1, self.max_turns + 1):
             # 协作式取消检查点：不再开始新的 LLM 轮次
             if context.is_cancelled:
@@ -424,8 +433,9 @@ class Agent:
                                 )
 
                 except Exception as e:
+                    nothing_out = not assistant_content and not tool_calls
                     # 上下文溢出（后端报错态）：尚未放出任何内容时压缩并同轮重发一次（harness.overflow）
-                    kind = self._overflow_kind(context, error=e) if not assistant_content and not tool_calls else None
+                    kind = self._overflow_kind(context, error=e) if nothing_out else None
                     if kind and recoveries < self._max_recoveries():
                         recoveries += 1
                         yield event.custom(
@@ -434,6 +444,14 @@ class Agent:
                         if await self._compact_overflow(context, kind):
                             messages = [self.get_system_message()] + context.history + context.get_messages(self.name)
                             continue
+                    # 瞬时故障：尚未放出任何内容时等待后同轮原样重发（harness.retry）
+                    elif nothing_out and self.retry is not None and self.retry.should_retry(e, retries):
+                        wait = self.retry.backoff(retries)
+                        retries += 1
+                        record_retry(context, self.name, turn, e)
+                        yield event.custom(name=RETRY_EVENT, value=retry_payload(self.name, turn, retries, e))
+                        await asyncio.sleep(wait)
+                        continue
                     error_msg = str(e)
                     # AG-UI: RUN_ERROR
                     yield event.run_error(message=error_msg)

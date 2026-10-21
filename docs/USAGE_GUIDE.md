@@ -475,6 +475,10 @@ class MyAgent(GuardedToolCalls, Agent):                       # mixin 必须在 
             yield evt
 ```
 
+执行失败退账（3.4+，`refund_failed=True` 缺省开）：放行时即登记签名与次数，工具执行失败（结果为单键
+`{"error": ...}`）后退还一次——同参重试不再被判重复、不占工具族上限；同一签名只退一次，再失败照常记账。退账写
+`GUARD_REFUND` 执行记录；`failed_tool_error(content)` 可在应用的 `hint` 里复用，给失败结果换一句故障提示。
+
 执行前：重复调用（同名同参，参数 JSON 规范化比较）→ 工具族上限 → 自定义 checks，命中即把 payload 作为 tool 消息退给
 模型并写一条与 Tool 管线同形的执行记录（`tool_name` 为守卫种类）；执行后：附提示、按预算折叠（最新一条永不折叠，
 `_folded` 标记不重复处理）。`buffer_plan_text` 按轮缓冲助手文字：轮以工具调用结束的文字记为 `agent_plan` 执行记录
@@ -541,6 +545,20 @@ class MyAgent(Agent):
 `length`。命中且本次尝试尚未向用户放出文字 / 工具调用时：yield `CUSTOM agent_overflow {agentName, kind, turn}` →
 `await compact(context, kind)` → 有成效即同一轮重发；每次运行最多 `max_recoveries`（缺省 1）次，再溢出按原路报
 `AGENT_EXECUTION_FAILED`。`classify_overflow(...)` 可单独调用。
+
+**TransientRetry**（`agstack.genai.harness.retry`，3.4+）：模型请求的瞬时故障（超时 / 连接中断 / 限流 / 上游 5xx）
+在**尚未放出任何文字或工具调用**时等待后同轮重发，与溢出恢复分开计数。
+
+```python
+from agstack.genai.harness import TransientRetry, is_transient_error
+
+class MyAgent(Agent):
+    retry = TransientRetry(max_retries=1, delay=1.0)           # 类属性缺省；构造参数 retry= 可覆盖
+```
+
+命中时写一条 `RETRY_RECORD` 执行记录、yield `CUSTOM agent_retry {agentName, turn, attempt, error}`、等待
+`delay × attempt` 秒后重发；已放出文字、非瞬时故障、超过 `max_retries` 或未配置策略按原路报 `AGENT_EXECUTION_FAILED`。
+`is_transient_error(exc)` 沿 `__cause__` / `__context__` 链按异常类名与状态码文本判定，可单独调用（如工具内部重试）。
 
 ### 3.9 上下文压缩引擎（3.0+）
 

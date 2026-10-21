@@ -87,8 +87,11 @@ is a free-form dict for hook/tool side information that is not fed to the model.
 count_tokens, fold_budget_ratio, fold_renderer, *_kind)` + `GuardState` (per-run counters, `cap` override) +
 `GuardedToolCalls` mixin (placed before `Agent` in the MRO). Pre-execution: duplicate call → family cap → custom
 `checks`; a hit is returned to the model as the tool message and recorded as an execution record shaped like a Tool
-call. Post-execution: `hint` appended to the tool message, oldest tool results folded when the running total exceeds
-`context_length // fold_budget_ratio` (the newest is never folded). `buffer_plan_text(events, context, agent_name=,
+call. Post-execution: a failed call (the tool message is a bare `{"error": ...}`) is refunded once — its signature and
+counters are rolled back so an identical retry is not rejected as a duplicate and does not eat the family cap; a second
+failure of the same signature stays charged (3.4, `refund_failed=True`, recorded as `GUARD_REFUND`;
+`failed_tool_error(content)` / `refund_tool_call(...)` are public); then `hint` is appended to the tool message, oldest
+tool results folded when the running total exceeds `context_length // fold_budget_ratio` (the newest is never folded). `buffer_plan_text(events, context, agent_name=,
 closing_line=)` wraps `Agent.stream`: text that precedes a tool call becomes an `agent_plan` record instead of being
 streamed; exhausted turns / empty final turns end with `closing_line(messages)`.
 
@@ -115,6 +118,16 @@ any text / tool call has been streamed, the agent yields `CUSTOM agent_overflow 
 app's `compact(context, kind) -> bool` (fold / summarize / shadow `context.history` and the agent's messages), and
 re-sends the same turn once if it returned True. A second overflow, an ineffective compaction or a missing policy
 fall through to the original error. `OVERFLOW_RECORD` is the suggested `tool_name` for the app's execution record.
+
+## Transient retry (3.4)
+
+`agstack.genai.harness.retry`: `TransientRetry(max_retries=1, delay=1.0, classify=is_transient_error)` is attached to
+`Agent.retry` (constructor kwarg or class attribute). When a model request fails **before any text / tool call has
+been streamed** and `classify(error)` says it is transient (timeouts, dropped connections, rate limits, upstream
+5xx — `is_transient_error` walks the `__cause__` / `__context__` chain by class name and status text), the agent
+writes a `RETRY_RECORD` execution record, yields `CUSTOM agent_retry {agentName, turn, attempt, error}`, sleeps
+`delay * attempt` and re-sends the same turn. Retries are counted separately from overflow recoveries; text already
+streamed, non-transient errors and a missing policy fall through to `AGENT_EXECUTION_FAILED`.
 
 ## Context compression engine (3.0)
 

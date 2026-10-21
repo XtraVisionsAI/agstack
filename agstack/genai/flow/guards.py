@@ -38,6 +38,7 @@ logger = logging.getLogger(__name__)
 GUARD_DUPLICATE = "guard_duplicate_call"
 GUARD_CAP = "guard_call_cap"
 GUARD_FOLD = "guard_fold_results"
+GUARD_REFUND = "guard_refund_failed"
 #: 计划记录的缺省 ``tool_name``
 PLAN_RECORD = "agent_plan"
 
@@ -59,17 +60,20 @@ class GuardState:
     :param seen_calls: 调用签名 → tool_call_id（重复调用判定）
     :param calls: 工具名 → 累计放行次数
     :param family_calls: 受上限工具族累计放行次数
+    :param refunded: 已因执行失败退还过一次记账的调用签名（3.4：同一签名只退一次）
     """
 
     cap: int | None = None
     seen_calls: dict[str, str] = field(default_factory=dict)
     calls: dict[str, int] = field(default_factory=dict)
     family_calls: int = 0
+    refunded: set[str] = field(default_factory=set)
 
     def reset(self) -> None:
         self.seen_calls = {}
         self.calls = {}
         self.family_calls = 0
+        self.refunded = set()
 
     def calls_of(self, *names: str) -> int:
         """给定工具名的累计放行次数之和"""
@@ -104,6 +108,9 @@ class AgentGuards:
     :param context_length_var / model_var: 从 ``context.variables`` 取上下文窗口与模型名的键
     :param duplicate_kind / cap_kind / fold_kind: 三类守卫动作写执行记录时的 ``tool_name``
     :param duplicate_payload / cap_payload: 退给模型的结果构造
+    :param refund_failed: 执行失败的调用退还一次记账（3.4）：放行时即登记签名与次数，失败调用不退就会占着工具族上限，
+        模型按报错原参数重试还会被判重复；同一签名只退一次，再失败照常记账以挡住无限重试
+    :param refund_kind: 退账动作写执行记录时的 ``tool_name``
     """
 
     capped_family: tuple[str, ...] = ()
@@ -121,6 +128,8 @@ class AgentGuards:
     fold_kind: str = GUARD_FOLD
     duplicate_payload: Callable[[str], dict[str, Any]] = _default_duplicate_payload
     cap_payload: Callable[[int], dict[str, Any]] = _default_cap_payload
+    refund_failed: bool = True
+    refund_kind: str = GUARD_REFUND
 
 
 # ── 纯函数 ──
@@ -161,6 +170,38 @@ def note_tool_call(guards: AgentGuards, state: GuardState, name: str, arguments:
     state.calls[name] = state.calls.get(name, 0) + 1
     if name in guards.capped_family:
         state.family_calls += 1
+
+
+def failed_tool_error(content: str) -> str | None:
+    """工具执行失败的结果（``Agent`` 统一写回 ``{"error": ...}``）返回错误串，其余返回 None
+
+    只认「开头是一个只含 ``error`` 键的 JSON 对象」——守卫拦截的结果带 ``hint`` 等键，不算执行失败；
+    结果末尾可能已被 ``hint`` 追加文字，按前缀解析。
+    """
+    text = (content or "").lstrip()
+    if not text.startswith("{"):
+        return None
+    try:
+        obj, _end = json.JSONDecoder().raw_decode(text)
+    except ValueError:
+        return None
+    if isinstance(obj, dict) and set(obj) == {"error"}:
+        return str(obj.get("error") or "")
+    return None
+
+
+def refund_tool_call(guards: AgentGuards, state: GuardState, name: str, arguments: str, call_id: str) -> bool:
+    """撤销一次放行记账（执行失败时调用）；该签名已退过、或签名已被别的调用占用时不退，返回是否退了"""
+    signature = call_signature(name, arguments)
+    if signature in state.refunded or state.seen_calls.get(signature) != call_id:
+        return False
+    state.refunded.add(signature)
+    state.seen_calls.pop(signature, None)
+    if state.calls.get(name, 0) > 0:
+        state.calls[name] -= 1
+    if name in guards.capped_family and state.family_calls > 0:
+        state.family_calls -= 1
+    return True
 
 
 _FOLDED_NOTE = "（该工具结果已折叠以节省上下文）"
@@ -267,6 +308,8 @@ class GuardedToolCalls:
         note_tool_call(self.guards, self.guard, name, arguments, tool_call["id"])
         async for evt in super()._stream_tool_call(context, tool_call, message_sink):  # type: ignore[misc]
             yield evt
+        if self.guards.refund_failed:
+            self._refund_if_failed(context, name, arguments, tool_call["id"], message_sink)
         self._append_hint(context, name, tool_call["id"], message_sink)
         self._fold(context)
 
@@ -295,20 +338,39 @@ class GuardedToolCalls:
                 summary=f"守卫折叠：最早 {folded} 条工具结果折叠为摘要",
             )
 
+    def _tool_message(
+        self, context: FlowContext, call_id: str, message_sink: list[dict[str, Any]] | None
+    ) -> dict[str, Any] | None:
+        """刚写回的 tool 消息（在 sink 或 context 里，按 tool_call_id 定位）"""
+        if message_sink is not None:
+            return next((m for m in reversed(message_sink) if m.get("tool_call_id") == call_id), None)
+        messages = context.messages.get(self.name) or []
+        return next(
+            (m for m in reversed(messages) if m.get("role") == "tool" and m.get("tool_call_id") == call_id), None
+        )
+
+    def _refund_if_failed(
+        self, context: FlowContext, name: str, arguments: str, call_id: str, message_sink: list[dict[str, Any]] | None
+    ) -> None:
+        """执行失败的调用退还一次记账，并写一条执行记录"""
+        target = self._tool_message(context, call_id, message_sink)
+        if target is None or failed_tool_error(str(target.get("content") or "")) is None:
+            return
+        if refund_tool_call(self.guards, self.guard, name, arguments, call_id):
+            add_trace_record(
+                context,
+                self.guards.refund_kind,
+                args={"tool": name, "arguments": arguments},
+                summary=f"守卫退账：{name} 执行失败，不计入重复 / 上限",
+            )
+
     def _append_hint(
         self, context: FlowContext, name: str, call_id: str, message_sink: list[dict[str, Any]] | None
     ) -> None:
         """把提示追加到刚写回的 tool 消息末尾（消息在 sink 或 context 里，按 tool_call_id 定位）"""
         if self.guards.hint is None:
             return
-        target: dict[str, Any] | None = None
-        if message_sink is not None:
-            target = next((m for m in reversed(message_sink) if m.get("tool_call_id") == call_id), None)
-        else:
-            messages = context.messages.get(self.name) or []
-            target = next(
-                (m for m in reversed(messages) if m.get("role") == "tool" and m.get("tool_call_id") == call_id), None
-            )
+        target = self._tool_message(context, call_id, message_sink)
         if target is None:
             return
         content = str(target.get("content") or "")
@@ -404,6 +466,7 @@ __all__ = [
     "GUARD_CAP",
     "GUARD_DUPLICATE",
     "GUARD_FOLD",
+    "GUARD_REFUND",
     "PLAN_RECORD",
     "AgentGuards",
     "FoldRenderer",
@@ -416,6 +479,8 @@ __all__ = [
     "buffer_plan_text",
     "call_signature",
     "check_tool_call",
+    "failed_tool_error",
     "fold_tool_messages",
     "note_tool_call",
+    "refund_tool_call",
 ]

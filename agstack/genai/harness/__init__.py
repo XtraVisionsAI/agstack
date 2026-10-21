@@ -16,6 +16,8 @@
   两遍装填），历史来源与摘要存取经 HistorySource / SummaryStore 由应用实现；
 - :mod:`.overflow`（3.0）：上下文溢出三态判定与 ``OverflowPolicy``（``Agent.stream`` 命中后调应用的压缩协程并
   同轮重发一次）；
+- :mod:`.retry`（3.4）：模型请求瞬时故障（超时 / 连接中断 / 限流 / 5xx）的重发策略 ``TransientRetry``
+  （``Agent.stream`` 在尚未放出任何内容时等待后同轮重发，与溢出恢复分开计数）与判定 ``is_transient_error``；
 - :mod:`.replay`（3.1）：日志回放重建与崩溃接管的读方修复——阶段标记 / 失败尝试事件、``recover`` 阅读一次运行的
   日志、``closers`` 合成闭合事件；``SessionLog`` 的 session 自 3.1 起定为一次运行（任务），seq 即 EventHub 序号。
 
@@ -90,6 +92,7 @@ from .replay import (
     tool_call,
     tool_result,
 )
+from .retry import RETRY_EVENT, RETRY_RECORD, TransientRetry, is_transient_error
 from .spill import SpillHook, SpillPolicy
 from .truncation import clamp_results, truncate_middle
 
@@ -119,8 +122,12 @@ __all__ = [
     "ModelCalibration",
     "EventHub",
     "OverflowPolicy",
+    "RETRY_EVENT",
+    "RETRY_RECORD",
+    "TransientRetry",
     "Projection",
     "classify_overflow",
+    "is_transient_error",
     "usage_tokens",
     "TaskSnapshot",
     "anchored_estimate",
