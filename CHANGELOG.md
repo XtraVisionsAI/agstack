@@ -1,3 +1,9 @@
+## 3.4.0 (2026-10-21)
+
+### Feat
+
+- **genai**: transient retry for streamed agent turns and refund failed guarded tool calls
+
 ## 3.3.1 (2026-10-21)
 
 ### Fix
