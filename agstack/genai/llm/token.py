@@ -92,25 +92,53 @@ class HFTokenizer:
 _CJK = re.compile(r"[　-ヿ㐀-䶿一-鿿가-힯豈-﫿＀-￯]")
 
 
+#: 第三类「符号」：ASCII 数字 / ASCII 标点 / ASCII 空白。全角标点与全角空格已落在 :data:`_CJK` 区间内，不重复计
+_SYMBOL = re.compile(r"[0-9!-/:-@\[-`{-~ \t\n\r\f\v]")
+
+
 class ApproxTokenizer:
     """按字符类别比例近似：CJK 每 token 约 ``cjk_chars_per_token`` 字，其余每 token 约 ``other_chars_per_token`` 字符
 
     用于拿不到词表的闭源模型；缺省比例偏保守（估算偏大 → 装填少装而非超限），应用按厂商覆盖。
+
+    第三类：给出 ``symbol_chars_per_token`` 时，ASCII 数字 / 标点 / 空白从「其他」中拆出、单独按此比例计。
+    代码与 JSON 工具结果里这类字符占比高、合并率远低于字母（标点多为单字符 token，数字按 1 到 3 位成组），
+    两类比例给它们与英文散文同一个系数，误差随内容类型摆动；拆成三类后一组系数能同时贴近散文与结构化文本。
+
+    - 缺省 ``None``：不拆，行为与两类完全一致（向后兼容，已标定的两类系数不受影响）；
+    - 参考值约 ``2.0`` 字符/token，**是估算而非实测**：依据 BPE 词表（cl100k / o200k / Claude）对数字至多 3 位
+      成组、常见标点组合（``":`` ``",`` ``{"``）与缩进空白串可合并、单个标点与词间空格多半各占或并入一个 token
+      的经验分布。启用三类后「其他」只剩字母等，其比例宜相应调高（英文字母约 4 到 4.5 字符/token）。
+      厂商系数以实报校准为准，剩余系统偏差由 ``harness.metering`` 的 EMA 吸收。
     """
 
     exact = False
 
-    def __init__(self, *, cjk_chars_per_token: float = 1.3, other_chars_per_token: float = 3.5, name: str = "approx"):
+    def __init__(
+        self,
+        *,
+        cjk_chars_per_token: float = 1.3,
+        other_chars_per_token: float = 3.5,
+        symbol_chars_per_token: float | None = None,
+        name: str = "approx",
+    ):
         if cjk_chars_per_token <= 0 or other_chars_per_token <= 0:
+            raise ValueError("chars_per_token must be positive")
+        if symbol_chars_per_token is not None and symbol_chars_per_token <= 0:
             raise ValueError("chars_per_token must be positive")
         self.name = name if name.startswith("approx") else f"approx:{name}"
         self._cjk = cjk_chars_per_token
         self._other = other_chars_per_token
+        self._symbol = symbol_chars_per_token
 
     def count(self, text: str) -> int:
         if not text:
             return 0
         cjk = len(_CJK.findall(text))
+        if self._symbol is not None:
+            symbol = len(_SYMBOL.findall(text))
+            other = len(text) - cjk - symbol
+            return math.ceil(cjk / self._cjk) + math.ceil(other / self._other) + math.ceil(symbol / self._symbol)
         other = len(text) - cjk
         return math.ceil(cjk / self._cjk) + math.ceil(other / self._other)
 

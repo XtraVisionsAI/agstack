@@ -88,6 +88,25 @@ def test_approx_tokenizer_ratios():
         tok.ApproxTokenizer(cjk_chars_per_token=0)
 
 
+def test_approx_tokenizer_symbol_class():
+    # 缺省不拆第三类：数字 / 标点 / 空白仍按「其他」计，与两类行为一致
+    two = tok.ApproxTokenizer(cjk_chars_per_token=1.0, other_chars_per_token=3.0)
+    assert two.count('{"a": 12}') == 3  # 9 / 3.0
+    three = tok.ApproxTokenizer(cjk_chars_per_token=1.0, other_chars_per_token=4.0, symbol_chars_per_token=2.0)
+    assert three.count("abcdefgh") == 2  # 纯字母：8 / 4.0
+    assert three.count("1234 , ;") == 4  # 全是符号类：8 / 2.0
+    # 混合：字母 a(1) / 符号 {":} 12 与空格共 8 个(4) / CJK 中文(2)
+    assert three.count('{"a": 12}中文') == 1 + 4 + 2
+    # 全角标点与全角空格归 CJK，不重复计入符号类
+    assert three.count("，。　") == 3
+    # 符号合并率低：等长的标点串比字母串估得更多，两类口径下二者相同
+    prose, code = "abcdefghijkl", "{[(),.;:]}!?"
+    assert three.count(code) > three.count(prose)
+    assert two.count(code) == two.count(prose)
+    with pytest.raises(ValueError):
+        tok.ApproxTokenizer(symbol_chars_per_token=0)
+
+
 def test_hf_tokenizer_from_local_file(tmp_path):
     pytest.importorskip("tokenizers")
     from tokenizers import Tokenizer as HF

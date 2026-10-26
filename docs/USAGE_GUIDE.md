@@ -655,6 +655,8 @@ count_tokens("……", "qwen3")       # 经注册表；≥64 字符的文本走 
 ```
 
 `HFTokenizer` 只数 ids、不加特殊 token；`ApproxTokenizer` 缺省比例偏保守（估算偏大 → 少装而非超限）。
+`ApproxTokenizer(symbol_chars_per_token=2.0, other_chars_per_token=4.0, ...)` 把 ASCII 数字 / 标点 / 空白
+拆成第三类单独计（缺省 `None` 不拆，与两类一致）；代码 / JSON 与散文混合时比两类更稳，参考值为估算，以实报校准为准。
 分词器文件的交付与路径由应用定（随模型目录离线交付）。
 
 **模型级校准**（`agstack.genai.harness.metering`）：`actual ≈ ratio × estimated + overhead`，按模型持久化、叠在任何分词器之上——
