@@ -1,3 +1,9 @@
+## 3.5.1 (2026-10-27)
+
+### Fix
+
+- **decorators**: declare with_session wrapper as returning Coroutine
+
 ## 3.5.0 (2026-10-27)
 
 ### Feat
