@@ -2,9 +2,10 @@
 
 import asyncio
 import time
+from collections.abc import Awaitable, Callable, Coroutine
 from functools import wraps
 from logging import Logger
-from typing import Awaitable, Callable, ParamSpec, TypeVar
+from typing import Any, ParamSpec, TypeVar
 
 from sqlobjects.session import ctx_session, has_session
 
@@ -54,8 +55,11 @@ P = ParamSpec("P")
 R = TypeVar("R")
 
 
-def with_session(func: Callable[P, Awaitable[R]], dbname: str | None = None) -> Callable[P, Awaitable[R]]:
-    """装饰器：确保方法在 session 上下文中执行，支持嵌套调用"""
+def with_session(func: Callable[P, Awaitable[R]], dbname: str | None = None) -> Callable[P, Coroutine[Any, Any, R]]:
+    """装饰器：确保方法在 session 上下文中执行，支持嵌套调用
+
+    返回的 wrapper 是协程函数，声明为 ``Coroutine`` 以便直接交给 ``asyncio.run`` / ``asyncio.create_task``。
+    """
 
     @wraps(func)
     async def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
