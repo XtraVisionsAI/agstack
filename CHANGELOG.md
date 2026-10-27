@@ -1,3 +1,9 @@
+## 3.5.0 (2026-10-27)
+
+### Feat
+
+- **llm**: optional third character class (digits/punctuation/whitespace) in ApproxTokenizer
+
 ## 3.4.0 (2026-10-21)
 
 ### Feat
