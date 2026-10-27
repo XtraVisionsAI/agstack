@@ -4,7 +4,7 @@
 
 import uuid
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 from pydantic import Field
@@ -12,7 +12,7 @@ from pydantic import Field
 from ...schema import BaseSchema
 
 
-class Status(str, Enum):
+class Status(StrEnum):
     """执行状态"""
 
     RUNNING = "running"
